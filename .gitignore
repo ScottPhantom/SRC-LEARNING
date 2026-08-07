@@ -1,0 +1,45 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Local content and user-generated data must never be published.
+DATA/
+user_data/
+uploads/
+exports/
+backups/
+
+# Databases and their sidecar/journal files.
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Runtime logs and local environment/secrets.
+*.log
+*.log.*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+secrets*
+
+# Common data exports.
+*.csv
+*.tsv
+*.jsonl
+*.ndjson
+*.parquet
+
+build/
+dist/
+ocr_failures/
+.vscode
+.antigravity-ide

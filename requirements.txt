@@ -1,0 +1,7 @@
+PyQt5>=5.15.10,<5.16
+darkdetect>=0.8,<1
+Pillow>=10.0,<13
+opencv-python-headless>=4.8,<5
+pytesseract>=0.3.10,<0.4
+pytest>=8.0,<10
+PyInstaller>=6.0,<7
