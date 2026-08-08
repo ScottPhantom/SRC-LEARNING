@@ -860,8 +860,7 @@ def test_main_window_default_and_minimum_sizes(tmp_path: Path) -> None:
     assert (window.width(), window.height()) == (1280, 800)
     assert (window.minimumWidth(), window.minimumHeight()) == (1100, 700)
     assert window.windowTitle() == APP_NAME == "SRC LEARNING"
-    assert window.app_header.title_label.text() == "SRC LEARNING"
-    assert window.app_header.home_button.text() == "📖"
+    assert window.app_header.title_label.text() == "SRC Learning"
     assert window.app_header.home_button.isFlat()
 
     window.thread_pool.waitForDone(2000)
@@ -969,8 +968,15 @@ def test_history_screen_multi_selection_and_controller_delete_refresh(
     assert isinstance(page, HistoryScreen)
     assert not page.delete_button.isEnabled()
     assert page.tree.selectionMode() == QAbstractItemView.ExtendedSelection
-    page.tree.topLevelItem(0).setSelected(True)
-    page.tree.topLevelItem(1).setSelected(True)
+    subject_node = page.tree.topLevelItem(0)
+    assert subject_node.text(0) == f"📁 Môn học: {subject.name}"
+    assert not subject_node.flags() & Qt.ItemIsSelectable
+    assert subject_node.childCount() == 2
+    subject_node.setSelected(True)
+    QT_APP.processEvents()
+    assert not page.delete_button.isEnabled()
+    subject_node.child(0).setSelected(True)
+    subject_node.child(1).setSelected(True)
     QT_APP.processEvents()
     assert page.delete_button.isEnabled()
     assert page.selected_attempt_ids() == sorted(attempt_ids)
@@ -1209,3 +1215,430 @@ def test_cramming_grid_click_focuses_unmastered_queue_item(tmp_path: Path) -> No
     assert screen.navigator.summary.text() == "Câu hỏi (0 / 3)"
     screen.deleteLater()
     database.close()
+
+
+def test_home_screen_loading_and_subjects_states(tmp_path: Path) -> None:
+    from app.ui.screens import HomeScreen
+    from app.ui.subject_card import SubjectCard, extract_monogram
+
+    assert extract_monogram("ITE303c") == "ITE"
+    assert extract_monogram("MAS291") == "MAS"
+    assert extract_monogram("MAI391") == "MAI"
+    assert extract_monogram("ADY201m") == "ADY"
+    assert extract_monogram("PRJ301") == "PRJ"
+    assert extract_monogram("CS101") == "CS"
+    assert extract_monogram("X1") == "X"
+    assert extract_monogram("123") == "SUB"
+
+    home = HomeScreen()
+    data_dir = tmp_path / "DATA"
+    data_dir.mkdir()
+
+    # Test set_loading không crash
+    home.set_loading(data_dir)
+    assert "Đang quét" in home.status_capsule.label.text()
+
+    # Test set_subjects với 0 môn
+    home.set_subjects([], data_dir)
+    assert home.cards_grid.count() == 0
+    assert "Chưa có môn học" in home.status_capsule.label.text()
+
+    # Test set_subjects với 1 môn
+    subject1 = make_subject(tmp_path, 2)
+    home.set_subjects([subject1], data_dir)
+    assert home.cards_grid.count() == 1
+    card1 = home.cards_grid.itemAt(0).widget()
+    assert isinstance(card1, SubjectCard)
+    assert card1.title_label.text() == subject1.name
+    assert f"{subject1.question_count} câu hỏi" in card1.count_label.text()
+    assert "Multiple_choose" not in card1.title_label.text()
+
+    # Test set_subjects với 3 môn
+    subject2 = make_subject(tmp_path, 1)
+    subject2.name = "CS101"
+    subject3 = make_subject(tmp_path, 4)
+    subject3.name = "PHY202"
+    home.set_subjects([subject1, subject2, subject3], data_dir)
+    assert home.cards_grid.count() == 3
+    assert "3 môn học" in home.status_capsule.label.text()
+    home.deleteLater()
+
+
+def test_subject_card_click_and_keyboard_signals(tmp_path: Path) -> None:
+    from app.ui.subject_card import SubjectCard
+    subject = make_subject(tmp_path, 2)
+    card = SubjectCard(subject)
+    card.show()
+    card.setFocus()
+    emitted = []
+    card.selected.connect(lambda name: emitted.append(name))
+
+    # Click test
+    QTest.mouseClick(card, Qt.LeftButton)
+    assert emitted == [subject.name]
+
+    # Enter key test
+    QTest.keyClick(card, Qt.Key_Return)
+    assert emitted == [subject.name, subject.name]
+
+    # Space key test
+    card.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Space, Qt.NoModifier))
+    assert emitted == [subject.name, subject.name, subject.name]
+    card.deleteLater()
+
+
+def test_app_header_actions_and_mode_toggle() -> None:
+    from PyQt5.QtWidgets import QVBoxLayout, QWidget
+
+    from app.ui.screens import AppHeader
+    win = QWidget()
+    win.resize(600, 100)
+    layout = QVBoxLayout(win)
+    header = AppHeader()
+    layout.addWidget(header)
+    win.show()
+    QT_APP.processEvents()
+
+    history_calls = []
+    refresh_calls = []
+    settings_calls = []
+
+    header.history_requested.connect(lambda: history_calls.append(True))
+    header.refresh_requested.connect(lambda: refresh_calls.append(True))
+    header.settings_requested.connect(lambda: settings_calls.append(True))
+
+    header.history_button.click()
+    header.refresh_button.click()
+    header.settings_button.click()
+
+    assert len(history_calls) == 1
+    assert len(refresh_calls) == 1
+    assert len(settings_calls) == 1
+
+    animated = header.refresh_button
+    QApplication.sendEvent(animated, QEvent(QEvent.Enter))
+    assert animated._hover_animation is not None
+    assert animated._hover_animation.duration() == 200
+    QTest.qWait(230)
+    assert animated.minimumSize() == animated.HOVER_SIZE
+    assert animated.maximumSize() == animated.HOVER_SIZE
+    assert animated.shadow.blurRadius() >= 21
+    assert animated.hoverBackground.alpha() > 0
+    QApplication.sendEvent(animated, QEvent(QEvent.Leave))
+    QTest.qWait(230)
+    assert animated.minimumSize() == animated.BASE_SIZE
+    assert animated.maximumSize() == animated.BASE_SIZE
+    assert animated.shadow.color().alpha() == 0
+
+    header.set_home_mode(False)
+    assert not header.action_capsule.isVisible()
+
+    header.set_home_mode(True)
+    assert header.action_capsule.isVisible()
+    win.close()
+    win.deleteLater()
+
+
+def test_history_tree_groups_subjects_formats_local_time_and_selects_only_exams() -> None:
+    from app.ui.screens import HistoryScreen
+
+    history = [
+        {
+            "id": 24,
+            "subject": "ITE303c",
+            "score": 8.5,
+            "score_percent": 85.0,
+            "submitted_at": "2026-08-07T07:30:39+00:00",
+        },
+        {
+            "id": 23,
+            "subject": "ITE303c",
+            "score": 7.0,
+            "score_percent": 70.0,
+            "submitted_at": "2026-08-06T01:15:00Z",
+        },
+        {
+            "id": 8,
+            "subject": "MATH101",
+            "score": 6.0,
+            "score_percent": 60.0,
+            "submitted_at": "invalid-time",
+        },
+    ]
+    screen = HistoryScreen(history)
+    screen.show()
+    QT_APP.processEvents()
+
+    assert screen.tree.topLevelItemCount() == 2
+    first_subject = screen.tree.topLevelItem(0)
+    assert first_subject.text(0) == "📁 Môn học: ITE303c"
+    assert first_subject.font(0).bold()
+    assert first_subject.background(0).color() == QColor("#D8DCE3")
+    assert first_subject.childCount() == 2
+    assert first_subject.child(0).text(0) == "Bài thi #24"
+    assert "ITE303c" not in first_subject.child(0).text(0)
+    assert first_subject.child(0).text(2) == HistoryScreen._format_submitted_at(
+        history[0]["submitted_at"]
+    )
+    assert first_subject.child(0).text(2).count(":") == 1
+    assert first_subject.child(0).text(2).count("/") == 2
+    second_subject = screen.tree.topLevelItem(1)
+    assert second_subject.text(0) == "📁 Môn học: MATH101"
+    assert second_subject.child(0).text(2) == "invalid-time"
+
+    first_subject.setSelected(True)
+    assert not screen.delete_button.isEnabled()
+    first_subject.child(0).setSelected(True)
+    QT_APP.processEvents()
+    assert screen.delete_button.isEnabled()
+    assert screen.selected_attempt_ids() == [24]
+    screen.close()
+
+
+def test_theme_switch_applies_and_repaints(tmp_path: Path) -> None:
+    from app.ui.screens import HomeScreen
+    from app.ui.themes import ThemeManager
+
+    subject = make_subject(tmp_path, 2)
+    home = HomeScreen()
+    home.set_subjects([subject], tmp_path / "DATA")
+
+    manager = ThemeManager(QT_APP)
+    manager.apply("dark")
+    assert QT_APP.property("appliedTheme") == "dark"
+    home.repaint()
+
+    manager.apply("light")
+    assert QT_APP.property("appliedTheme") == "light"
+    home.repaint()
+    home.deleteLater()
+
+
+def test_home_grid_reflow_preserves_card_instances(tmp_path: Path) -> None:
+    from app.ui.screens import HomeScreen
+    subject1 = make_subject(tmp_path, 2)
+    subject1.name = "MATH"
+    subject2 = make_subject(tmp_path, 3)
+    subject2.name = "PHYSICS"
+
+    home = HomeScreen()
+    home.set_subjects([subject1, subject2], tmp_path / "DATA")
+    card1_before = home._card_widgets["MATH"]
+    card2_before = home._card_widgets["PHYSICS"]
+    card1_id = id(card1_before)
+    card2_id = id(card2_before)
+
+    # Trigger resize reflow
+    home.resize(700, 800)
+    home._reflow_grid(force=True)
+    QT_APP.processEvents()
+
+    card1_after = home._card_widgets["MATH"]
+    card2_after = home._card_widgets["PHYSICS"]
+
+    assert id(card1_after) == card1_id
+    assert id(card2_after) == card2_id
+    assert home.cards_grid.alignment() & Qt.AlignLeft
+    assert home.cards_grid.alignment() & Qt.AlignTop
+    home.deleteLater()
+
+
+def test_toolbar_icon_size_alignment_and_reload_pixels() -> None:
+    from PyQt5.QtCore import QSize
+    from PyQt5.QtGui import QColor
+
+    from app.ui.icons import create_line_icon
+    from app.ui.screens import AppHeader
+
+    header = AppHeader()
+
+    for btn in (header.history_button, header.refresh_button, header.settings_button):
+        assert btn.iconSize() == QSize(24, 24)
+        assert btn.minimumWidth() == 36
+        assert btn.minimumHeight() == 36
+
+    # Kiểm tra icon refresh có pixel ở cả 4 góc phần tư
+    icon = create_line_icon("refresh", size=24, color=QColor("#0A84FF"))
+    pixmap = icon.pixmap(24, 24)
+    image = pixmap.toImage()
+
+    # Kiểm tra 4 góc phần tư có ít nhất 1 pixel không trong suốt
+    w, h = image.width(), image.height()
+    quad1 = any(
+        image.pixelColor(x, y).alpha() > 0
+        for x in range(w // 2)
+        for y in range(h // 2)
+    )
+    quad2 = any(
+        image.pixelColor(x, y).alpha() > 0
+        for x in range(w // 2, w)
+        for y in range(h // 2)
+    )
+    quad3 = any(
+        image.pixelColor(x, y).alpha() > 0
+        for x in range(w // 2)
+        for y in range(h // 2, h)
+    )
+    quad4 = any(
+        image.pixelColor(x, y).alpha() > 0
+        for x in range(w // 2, w)
+        for y in range(h // 2, h)
+    )
+
+    assert quad1 and quad2 and quad3 and quad4, "Reload icon phải vẽ dạng vòng tròn phủ cả 4 góc phần tư"
+    header.deleteLater()
+
+
+def test_settings_image_viewer_dynamic_path_and_placeholder(tmp_path: Path) -> None:
+    from app.controllers import MainWindow
+    from app.domain.models import AppSettings
+    from app.repositories.database import Database
+    from app.ui.screens import SettingsScreen
+
+    # 1. Test với preview_path = None -> placeholder_frame hiển thị
+    settings = AppSettings()
+    screen_none = SettingsScreen(settings, preview_path=None)
+    assert screen_none.placeholder_frame is not None
+    assert screen_none.preview is None
+
+    # 2. Test với đường dẫn file không tồn tại -> placeholder_frame hiển thị
+    fake_path = tmp_path / "non_existent.png"
+    screen_fake = SettingsScreen(settings, preview_path=fake_path)
+    assert screen_fake.placeholder_frame is not None
+    assert screen_fake.preview is None
+
+    # 3. Test với file ảnh thật từ make_subject
+    subject = make_subject(tmp_path, 2)
+    img_path = subject.questions[0].absolute_path
+
+    screen_real = SettingsScreen(settings, preview_path=img_path)
+    assert screen_real.preview is not None
+    assert screen_real.placeholder_frame is None
+
+    # 4. Test thay đổi Crop Spinbox -> cập nhật preview
+    screen_real.crop_values[1].setValue(20.0)  # Crop Y = 20%
+    QT_APP.processEvents()
+
+    # 5. Test MainWindow show_settings() chọn ảnh động từ Controller
+    db = Database(tmp_path / "test.sqlite3")
+    window = MainWindow(db)
+    window.data_dir = tmp_path / "DATA"
+    window.subjects = {subject.name: subject}
+    window.show_settings()
+
+    dynamic_page = window._dynamic_page
+    assert isinstance(dynamic_page, SettingsScreen)
+    assert dynamic_page.preview is not None
+
+    screen_none.deleteLater()
+    screen_fake.deleteLater()
+    screen_real.deleteLater()
+    window.thread_pool.waitForDone(2000)
+    window.close()
+    window.deleteLater()
+    db.close()
+
+
+def test_light_home_background_asset_and_variant_rendering() -> None:
+    from PyQt5.QtCore import QRectF
+    from PyQt5.QtGui import QImage, QPainter
+
+    import app.ui.background as bg_mod
+    from app.ui.background import (
+        LIGHT_HOME_BG_ASSET,
+        get_home_light_pixmap,
+        paint_app_background,
+        resolve_resource_path,
+    )
+    from app.ui.screens import BasePage, HomeBackgroundCanvas
+    from app.ui.themes import ThemeManager
+
+    # 1. Test resource resolver
+    resolved = resolve_resource_path(LIGHT_HOME_BG_ASSET)
+    assert resolved.exists(), f"Asset {LIGHT_HOME_BG_ASSET} phải tồn tại ở {resolved}"
+
+    # 2. Test QPixmap load asset thành công
+    pixmap = get_home_light_pixmap()
+    assert pixmap is not None and not pixmap.isNull()
+    assert pixmap.width() > 0 and pixmap.height() > 0
+
+    # 3. Test HomeBackgroundCanvas dùng variant='home'
+    canvas = HomeBackgroundCanvas()
+    assert canvas.variant == "home"
+
+    # Test BasePage canvas
+    page = BasePage()
+
+    # 4. Test paint_app_background không throw ở cả Light và Dark mode với các variant
+    manager = ThemeManager(QT_APP)
+    img = QImage(800, 600, QImage.Format_ARGB32)
+
+    # Light Mode
+    manager.apply("light")
+    painter = QPainter(img)
+    paint_app_background(painter, QRectF(0, 0, 800, 600), dark=False, variant="home")
+    paint_app_background(painter, QRectF(0, 0, 800, 600), dark=False, variant="default")
+    painter.end()
+
+    # Dark Mode
+    manager.apply("dark")
+    painter = QPainter(img)
+    paint_app_background(painter, QRectF(0, 0, 800, 600), dark=True, variant="home")
+    paint_app_background(painter, QRectF(0, 0, 800, 600), dark=True, variant="default")
+    painter.end()
+
+    # 5. Test fallback khi missing asset
+    orig_pixmap = bg_mod._HOME_LIGHT_PIXMAP
+    orig_loaded = bg_mod._HOME_LIGHT_LOADED
+    try:
+        bg_mod._HOME_LIGHT_PIXMAP = None
+        bg_mod._HOME_LIGHT_LOADED = True  # Giả lập không có pixmap
+        painter = QPainter(img)
+        paint_app_background(painter, QRectF(0, 0, 800, 600), dark=False, variant="home")
+        painter.end()
+    finally:
+        bg_mod._HOME_LIGHT_PIXMAP = orig_pixmap
+        bg_mod._HOME_LIGHT_LOADED = orig_loaded
+
+    manager.apply("light")
+    canvas.deleteLater()
+    page.deleteLater()
+
+
+def test_glass_header_and_shell_continuous_background_navigation(tmp_path: Path) -> None:
+    from app.controllers import MainWindow
+    from app.repositories.database import Database
+    from app.ui.background import AppShell
+
+    db = Database(tmp_path / "test.sqlite3")
+    window = MainWindow(db)
+    window.resize(1280, 800)
+    window.show()
+    QT_APP.processEvents()
+
+    # 1. Trạng thái HomeScreen active
+    assert isinstance(window.shell, AppShell)
+    assert window.shell.home_background_active is True
+    assert window.app_header.is_home_mode is True
+    assert window.app_header.property("homeMode") == "true"
+    assert window.shell.property("homeBackgroundActive") == "true"
+
+    # 2. Chuyển sang SettingsScreen -> Tắt glass home mode ở shell & header
+    window.show_settings()
+    QT_APP.processEvents()
+    assert window.shell.home_background_active is False
+    assert window.app_header.is_home_mode is False
+    assert window.app_header.property("homeMode") == "false"
+    assert window.shell.property("homeBackgroundActive") == "false"
+
+    # 3. Quay lại HomeScreen -> Bật lại glass home mode ở shell & header
+    window.show_home()
+    QT_APP.processEvents()
+    assert window.shell.home_background_active is True
+    assert window.app_header.is_home_mode is True
+    assert window.app_header.property("homeMode") == "true"
+    assert window.shell.property("homeBackgroundActive") == "true"
+
+    window.thread_pool.waitForDone(2000)
+    window.close()
+    db.close()

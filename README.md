@@ -8,7 +8,7 @@
 
 Giao diện và thông báo của ứng dụng sử dụng tiếng Việt. Tiến trình học và kết quả thi được lưu cục bộ trong `study_progress.sqlite3`.
 
-Header toàn cục luôn hiển thị nút `📖` và tên `SRC LEARNING`. Nhấn `📖` từ bất kỳ màn hình nào sẽ trở về màn hình chọn môn học; nếu Mock Exam còn đang làm, ứng dụng yêu cầu chọn hủy thao tác, nộp rồi thoát, hoặc thoát không lưu.
+Header toàn cục luôn hiển thị nút thương hiệu `SRC Learning`; nhấn nút này từ bất kỳ màn hình nào sẽ trở về màn hình chọn môn học. Trên Home, cụm Lịch sử/Làm mới/Cài đặt có animation hover 200 ms: phóng nhẹ khoảng 1,05×, đổi nền và tăng bóng xanh. Nếu Mock Exam còn đang làm, ứng dụng yêu cầu chọn hủy thao tác, nộp rồi thoát, hoặc thoát không lưu.
 
 ## Yêu cầu hệ thống
 
@@ -177,7 +177,7 @@ python main.py
 8. Khi tạo đề, các câu từng sai nhiều được lấy mẫu ngẫu nhiên với trọng số cao hơn; câu đã trả lời đúng nhiều lần được giảm trọng số. Thuật toán vẫn bảo đảm không trùng câu trong cùng một đề.
 9. Màn hình kết quả có menu `↻ RE-Test`: tạo ngay đề mới bằng đúng cấu hình vừa dùng hoặc quay về màn hình cấu hình để chọn option khác.
 10. Kết quả chi tiết hiển thị bằng bảng 3 cột `NO / Correct answer / Điểm`; chọn một hàng để mở ảnh review. Hàng Total hiển thị tổng điểm và `PASS` từ 7.0 điểm trở lên, ngược lại là `FAIL`.
-11. Lịch sử bài thi cho phép chọn nhiều bài bằng `Ctrl/Cmd` hoặc `Shift`, sau đó dùng `🗑️ Xóa bài thi`. Việc xóa luôn yêu cầu xác nhận và xóa cascade toàn bộ chi tiết câu trả lời liên quan.
+11. Lịch sử bài thi được gom theo cây hai cấp `📁 Môn học → Bài thi #ID`; thời gian được đổi sang múi giờ máy và hiển thị `dd/MM/yyyy HH:mm`. Chỉ node bài thi có thể được chọn bằng `Ctrl/Cmd` hoặc `Shift` để dùng `🗑️ Xóa bài thi`; node môn học không thể xóa. Việc xóa luôn yêu cầu xác nhận và xóa cascade toàn bộ chi tiết câu trả lời liên quan.
 
 ### Phím tắt khi học/làm bài
 
