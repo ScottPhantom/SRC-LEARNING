@@ -8,6 +8,12 @@
 
 Giao diện và thông báo của ứng dụng sử dụng tiếng Việt. Tiến trình học và kết quả thi được lưu cục bộ trong `study_progress.sqlite3`.
 
+Trước khi nâng cấp một database có schema cũ, ứng dụng tự tạo bản backup SQLite
+nhất quán cùng thư mục, theo mẫu
+`study_progress.pre-v<version>.<UTC timestamp>.sqlite3`. Migration chỉ bắt đầu
+sau khi bản backup vượt qua `PRAGMA integrity_check`; nếu backup thất bại, ứng
+dụng dừng khởi động và giữ nguyên database cũ.
+
 Header toàn cục luôn hiển thị nút `📖` và tên `SRC LEARNING`. Nhấn `📖` từ bất kỳ màn hình nào sẽ trở về màn hình chọn môn học; nếu Mock Exam còn đang làm, ứng dụng yêu cầu chọn hủy thao tác, nộp rồi thoát, hoặc thoát không lưu.
 
 ## Yêu cầu hệ thống

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from collections.abc import Iterator, Sequence
@@ -10,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.models import AppSettings, Question, QuestionErrorStat
+
+LOGGER = logging.getLogger(__name__)
+CURRENT_SCHEMA_VERSION = 4
 
 
 def utc_now() -> str:
@@ -23,11 +27,75 @@ class Database:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        had_existing_data = self.path.is_file() and self.path.stat().st_size > 0
         self._connection = sqlite3.connect(str(self.path), check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys = ON")
-        self._connection.execute("PRAGMA journal_mode = WAL")
-        self._migrate()
+        self.migration_backup_path: Path | None = None
+        try:
+            if had_existing_data:
+                previous_version = self._read_schema_version()
+                if previous_version < CURRENT_SCHEMA_VERSION:
+                    self.migration_backup_path = self._create_migration_backup(
+                        previous_version
+                    )
+            self._connection.execute("PRAGMA foreign_keys = ON")
+            self._connection.execute("PRAGMA journal_mode = WAL")
+            self._migrate()
+        except Exception:
+            self._connection.close()
+            raise
+
+    def _read_schema_version(self) -> int:
+        table = self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'"
+        ).fetchone()
+        if table is None:
+            return 0
+        row = self._connection.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row["version"])
+        except (TypeError, ValueError) as exc:
+            raise sqlite3.DatabaseError("Giá trị schema_version không hợp lệ") from exc
+
+    def _create_migration_backup(self, previous_version: int) -> Path:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        suffix = self.path.suffix or ".sqlite3"
+        backup_path = self.path.with_name(
+            f"{self.path.stem}.pre-v{previous_version}.{timestamp}{suffix}"
+        )
+        backup_connection: sqlite3.Connection | None = None
+        try:
+            backup_connection = sqlite3.connect(str(backup_path))
+            self._connection.backup(backup_connection)
+            integrity = backup_connection.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or str(integrity[0]).casefold() != "ok":
+                detail = integrity[0] if integrity else "không có kết quả"
+                raise sqlite3.DatabaseError(
+                    f"Bản backup trước migration không toàn vẹn: {detail}"
+                )
+            backup_connection.close()
+            backup_connection = None
+        except Exception:
+            if backup_connection is not None:
+                backup_connection.close()
+            backup_path.unlink(missing_ok=True)
+            LOGGER.exception(
+                "Không thể backup database trước migration: source=%s, version=%d",
+                self.path,
+                previous_version,
+            )
+            raise
+        LOGGER.info(
+            "Đã backup database trước migration: source=%s, version=%d, backup=%s",
+            self.path,
+            previous_version,
+            backup_path,
+        )
+        return backup_path
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -186,7 +254,10 @@ class Database:
                     "ALTER TABLE cram_cycles ADD COLUMN grading_mode TEXT NOT NULL "
                     "DEFAULT 'self_assessment'"
                 )
-            connection.execute("UPDATE schema_version SET version=4 WHERE version < 4")
+            connection.execute(
+                "UPDATE schema_version SET version=? WHERE version < ?",
+                (CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION),
+            )
 
     def sync_questions(
         self, questions: Sequence[Question], subject_names: Sequence[str] | None = None
