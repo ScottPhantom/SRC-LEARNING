@@ -3,28 +3,48 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QKeySequence
+from PyQt5.QtCore import (
+    QEasingCurve,
+    QParallelAnimationGroup,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtProperty,
+    pyqtSignal,
+)
+from PyQt5.QtGui import (
+    QColor,
+    QCursor,
+    QKeySequence,
+    QLinearGradient,
+    QPainter,
+)
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMenu,
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QShortcut,
     QSizePolicy,
     QSpacerItem,
@@ -52,8 +72,12 @@ from app.repositories.answer_key import AnswerKeyReport
 from app.services.exam import ExamResult, ExamService, ExamSession
 from app.services.study import CrammingService, CramState, FlashcardService, FlashState
 from app.ui.assessment_sidebar import AssessmentSidebar
+from app.ui.background import AppBackgroundCanvas, paint_app_background
+from app.ui.icons import create_line_icon
 from app.ui.image_viewer import QuestionImageViewer
 from app.ui.progress import SegmentedProgressBar, StudyProgressBar
+from app.ui.status_capsule import StatusCapsule
+from app.ui.subject_card import SubjectCard
 from app.ui.subject_dashboard import QuickReviewDialog, StudyModeCard
 
 
@@ -106,30 +130,229 @@ def install_assessment_keymap(
     return shortcuts
 
 
+class BrandButton(QPushButton):
+    """Nút thương hiệu 'SRC Learning' ở góc trên-trái AppHeader với sizeHint chuẩn."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("globalHomeButton")
+        self.setFlat(True)
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setToolTip("Về màn hình chính")
+        self.setAccessibleName("Về màn hình chính — SRC Learning")
+        self.setText("SRC Learning")
+        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.setFixedHeight(38)
+        self.update_theme()
+
+    def update_theme(self) -> None:
+        app = QApplication.instance()
+        is_dark = (app and app.property("appliedTheme") == "dark")
+        icon_color = QColor("#60A5FA") if is_dark else QColor("#0A84FF")
+        self.setIcon(create_line_icon("logo", size=22, color=icon_color, stroke_width=2.0))
+        self.setIconSize(QSize(22, 22))
+
+
+class AnimatedHeaderActionButton(QPushButton):
+    """Nút action có hiệu ứng hover 3D nhưng không làm giật bố cục header."""
+
+    BASE_SIZE = QSize(36, 36)
+    HOVER_SIZE = QSize(38, 38)
+
+    def __init__(self, tooltip: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("headerActionButton")
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setToolTip(tooltip)
+        self.setAccessibleName(tooltip)
+        self.setMinimumSize(self.BASE_SIZE)
+        self.setMaximumSize(self.BASE_SIZE)
+        self._hover_background = QColor(0, 0, 0, 0)
+        self._hover_animation: QParallelAnimationGroup | None = None
+        self._icon_type: str | None = None
+        self._base_icon_color = QColor("#515154")
+        self._showing_hover_icon = False
+        self.shadow = QGraphicsDropShadowEffect(self)
+        self.shadow.setBlurRadius(8)
+        self.shadow.setOffset(0, 2)
+        self.shadow.setColor(QColor(96, 165, 250, 0))
+        self.setGraphicsEffect(self.shadow)
+
+    def _get_hover_background(self) -> QColor:
+        return self._hover_background
+
+    def _set_hover_background(self, color: QColor) -> None:
+        self._hover_background = QColor(color)
+        showing_hover_icon = color.alpha() > 16
+        if self._icon_type is not None and showing_hover_icon != self._showing_hover_icon:
+            self._showing_hover_icon = showing_hover_icon
+            icon_color = QColor("#FFFFFF") if showing_hover_icon else self._base_icon_color
+            self.setIcon(
+                create_line_icon(
+                    self._icon_type,
+                    size=24,
+                    color=icon_color,
+                    stroke_width=2.0,
+                )
+            )
+            self.setIconSize(QSize(24, 24))
+        self.update()
+
+    def set_action_icon(self, icon_type: str, color: QColor) -> None:
+        self._icon_type = icon_type
+        self._base_icon_color = QColor(color)
+        icon_color = QColor("#FFFFFF") if self._showing_hover_icon else color
+        self.setIcon(
+            create_line_icon(icon_type, size=24, color=icon_color, stroke_width=2.0)
+        )
+        self.setIconSize(QSize(24, 24))
+
+    hoverBackground = pyqtProperty(
+        QColor,
+        fget=_get_hover_background,
+        fset=_set_hover_background,
+    )
+
+    def _animate_hover(self, hovered: bool) -> None:
+        if self._hover_animation is not None:
+            self._hover_animation.stop()
+        target_size = self.HOVER_SIZE if hovered else self.BASE_SIZE
+        target_background = (
+            QColor(239, 65, 54, 255)
+            if hovered
+            else QColor(0, 0, 0, 0)
+        )
+        group = QParallelAnimationGroup(self)
+        targets = (
+            (self, b"minimumSize", self.minimumSize(), target_size),
+            (self, b"maximumSize", self.maximumSize(), target_size),
+            (self, b"hoverBackground", self.hoverBackground, target_background),
+            (self.shadow, b"blurRadius", self.shadow.blurRadius(), 22.0 if hovered else 8.0),
+            (self.shadow, b"offset", self.shadow.offset(), QPointF(0, 5 if hovered else 2)),
+            (
+                self.shadow,
+                b"color",
+                self.shadow.color(),
+                QColor(239, 65, 54, 145 if hovered else 0),
+            ),
+        )
+        for target, property_name, start_value, end_value in targets:
+            animation = QPropertyAnimation(target, property_name, group)
+            animation.setStartValue(start_value)
+            animation.setEndValue(end_value)
+            animation.setDuration(200)
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+            group.addAnimation(animation)
+        self._hover_animation = group
+        group.start()
+
+    def enterEvent(self, event) -> None:
+        self._animate_hover(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._animate_hover(False)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:
+        if self._hover_background.alpha() > 0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(Qt.NoPen)
+            gradient = QLinearGradient(0, 0, self.width(), self.height())
+            opacity = self._hover_background.alpha()
+            gradient.setColorAt(0.0, QColor(239, 65, 54, opacity))
+            gradient.setColorAt(1.0, QColor(251, 176, 64, opacity))
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 11, 11)
+            painter.end()
+        super().paintEvent(event)
+
+
 class AppHeader(QFrame):
-    """Header nhận diện và điều hướng Home dùng chung cho toàn ứng dụng."""
+    """Header nhận diện và điều hướng dùng chung cho toàn ứng dụng."""
 
     home_requested = pyqtSignal()
+    history_requested = pyqtSignal()
+    refresh_requested = pyqtSignal()
+    settings_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("globalHeader")
-        self.setFixedHeight(52)
+        self.setFixedHeight(62)
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 5, 20, 5)
-        layout.setSpacing(8)
-        self.home_button = QPushButton("📖")
-        self.home_button.setObjectName("globalHomeButton")
-        self.home_button.setFlat(True)
-        self.home_button.setFixedSize(40, 40)
-        self.home_button.setToolTip("Về màn hình chính")
-        self.home_button.setAccessibleName("Về màn hình chính")
+        layout.setContentsMargins(24, 8, 24, 8)
+        layout.setSpacing(12)
+
+        # Brand Button hiển thị đầy đủ icon + "SRC Learning" không bị clipped
+        self.home_button = BrandButton()
         self.home_button.clicked.connect(self.home_requested)
-        self.title_label = QLabel("SRC LEARNING")
-        self.title_label.setObjectName("globalAppTitle")
-        layout.addWidget(self.home_button)
-        layout.addWidget(self.title_label)
+        self.title_label = self.home_button  # Dành cho backward compatibility trong test
+
+        layout.addWidget(self.home_button, alignment=Qt.AlignVCenter)
         layout.addStretch(1)
+
+        # Right Action Capsule căn giữa dọc (Qt.AlignVCenter)
+        self.action_capsule = QFrame()
+        self.action_capsule.setObjectName("headerActionCapsule")
+        capsule_layout = QHBoxLayout(self.action_capsule)
+        capsule_layout.setContentsMargins(6, 3, 6, 3)
+        capsule_layout.setSpacing(4)
+        capsule_layout.setAlignment(Qt.AlignCenter)
+
+        self.history_button = AnimatedHeaderActionButton("Lịch sử thi")
+        self.history_button.setIconSize(QSize(24, 24))
+        self.history_button.clicked.connect(self.history_requested)
+
+        self.refresh_button = AnimatedHeaderActionButton("Làm mới dữ liệu")
+        self.refresh_button.setIconSize(QSize(24, 24))
+        self.refresh_button.clicked.connect(self.refresh_requested)
+
+        self.settings_button = AnimatedHeaderActionButton("Cài đặt")
+        self.settings_button.setIconSize(QSize(24, 24))
+        self.settings_button.clicked.connect(self.settings_requested)
+
+        capsule_layout.addWidget(self.history_button, alignment=Qt.AlignCenter)
+        capsule_layout.addWidget(self.refresh_button, alignment=Qt.AlignCenter)
+        capsule_layout.addWidget(self.settings_button, alignment=Qt.AlignCenter)
+
+        layout.addWidget(self.action_capsule, alignment=Qt.AlignVCenter)
+        self.is_home_mode = True
+        self.set_home_mode(True)
+        self.update_theme()
+
+    def update_theme(self) -> None:
+        app = QApplication.instance()
+        is_dark = (app and app.property("appliedTheme") == "dark")
+        icon_color = QColor("#A1A1A6") if is_dark else QColor("#515154")
+
+        self.home_button.update_theme()
+        self.history_button.set_action_icon("history", icon_color)
+        self.refresh_button.set_action_icon("refresh", icon_color)
+        self.settings_button.set_action_icon("settings", icon_color)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.action_capsule.style().unpolish(self.action_capsule)
+        self.action_capsule.style().polish(self.action_capsule)
+        self.update()
+
+    def set_home_mode(self, is_home: bool) -> None:
+        """Ẩn/hiện nhóm nút toolbar khi chuyển màn hình và cập nhật hiệu ứng glass header."""
+        self.is_home_mode = is_home
+        self.action_capsule.setVisible(is_home)
+        self.setProperty("homeMode", "true" if is_home else "false")
+        self.action_capsule.setProperty("homeMode", "true" if is_home else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.action_capsule.style().unpolish(self.action_capsule)
+        self.action_capsule.style().polish(self.action_capsule)
+        self.update()
+
+
+
+
 
 
 class BasePage(QWidget):
@@ -138,11 +361,56 @@ class BasePage(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("page")
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        paint_app_background(painter, QRectF(self.rect()))
+        painter.end()
+
+    def update_theme(self) -> None:
+        self.update()
 
     def back_button(self) -> QPushButton:
         button = secondary(QPushButton("← Quay lại"))
         button.clicked.connect(self.back_requested)
         return button
+
+
+class HomeBackgroundCanvas(AppBackgroundCanvas):
+    """Canvas dành riêng cho HomeScreen kết hợp ảnh gradient pastel ở Light Mode và shared dark background ở Dark Mode."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent, variant="home")
+        self.setObjectName("homeCanvas")
+        self.setAttribute(Qt.WA_OpaquePaintEvent, False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+
+    def paintEvent(self, event) -> None:
+        app = QApplication.instance()
+        is_dark = (app and app.property("appliedTheme") == "dark")
+
+        # Nếu AppShell cha đang vẽ continuous home background phía sau (ở Light Mode),
+        # canvas con để trong suốt (WA_OpaquePaintEvent=False) để tránh vẽ đè.
+        parent = self.parent()
+        is_shell_painting = False
+        while parent is not None:
+            if getattr(parent, "home_background_active", False) and not is_dark:
+                is_shell_painting = True
+                break
+            parent = parent.parent()
+
+        if is_shell_painting:
+            return
+
+        painter = QPainter(self)
+        if not painter.isActive():
+            return
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        paint_app_background(painter, QRectF(self.rect()), dark=is_dark, variant="home")
+        painter.end()
 
 
 class HomeScreen(QWidget):
@@ -153,72 +421,173 @@ class HomeScreen(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setObjectName("page")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 28)
-        header = QHBoxLayout()
-        title, subtitle = page_title(
-            "Chọn môn học", "Bắt đầu Flashcard, Cramming hoặc Mock Exam."
-        )
-        heading = QVBoxLayout()
-        heading.addWidget(title)
-        heading.addWidget(subtitle)
-        header.addLayout(heading, 1)
-        refresh = secondary(QPushButton("Làm mới"))
-        refresh.clicked.connect(self.refresh_requested)
-        history = secondary(QPushButton("Lịch sử thi"))
-        history.clicked.connect(self.history_requested)
-        settings = secondary(QPushButton("Cài đặt"))
-        settings.clicked.connect(self.settings_requested)
-        header.addWidget(refresh)
-        header.addWidget(history)
-        header.addWidget(settings)
-        layout.addLayout(header)
+        self.setObjectName("homePage")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self._subjects_list: list[Subject] = []
+        self._card_widgets: dict[str, SubjectCard] = {}
+        self._current_data_dir: Path = Path("DATA")
+        self._current_cols = 0
 
-        self.notice = QLabel()
-        self.notice.setWordWrap(True)
-        layout.addWidget(self.notice)
-        self.subjects = QListWidget()
-        self.subjects.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.subjects.itemDoubleClicked.connect(self._open_item)
-        layout.addWidget(self.subjects, 1)
-        open_button = QPushButton("Mở môn học")
-        open_button.clicked.connect(self._open_selected)
-        layout.addWidget(open_button, alignment=Qt.AlignRight)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # ScrollArea với nền trong suốt hoàn toàn
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("homeScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.scroll_area.setAutoFillBackground(False)
+
+        viewport = self.scroll_area.viewport()
+        if viewport:
+            viewport.setObjectName("homeViewport")
+            viewport.setAttribute(Qt.WA_TranslucentBackground, True)
+            viewport.setAutoFillBackground(False)
+
+        # Canvas chứa nền Ambient Glow
+        self.canvas = HomeBackgroundCanvas()
+        self.canvas_layout = QVBoxLayout(self.canvas)
+        self.canvas_layout.setContentsMargins(76, 64, 76, 48)
+        self.canvas_layout.setSpacing(0)
+
+        # Content container max-width 1680px, căn trái
+        self.content_container = QWidget()
+        self.content_container.setObjectName("homeContentContainer")
+        self.content_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.content_container.setMaximumWidth(1680)
+        self.content_container.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.content_container.setAutoFillBackground(False)
+
+        container_layout = QVBoxLayout(self.content_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        container_layout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+
+        # Heading section (Title -> Subtitle -> Status Capsule)
+        self.title_label = QLabel("Thư viện")
+        self.title_label.setObjectName("homeTitle")
+
+        self.subtitle_label = QLabel("Chọn một môn học để bắt đầu ôn luyện.")
+        self.subtitle_label.setObjectName("homeSubtitle")
+
+        self.status_capsule = StatusCapsule()
+        self.status_capsule.settings_clicked.connect(self.settings_requested)
+        self.notice = self.status_capsule  # Backward compatibility
+
+        container_layout.addWidget(self.title_label)
+        container_layout.addSpacing(10)  # Title -> Subtitle 10px
+        container_layout.addWidget(self.subtitle_label)
+        container_layout.addSpacing(22)  # Subtitle -> Status Capsule 22px
+        container_layout.addWidget(self.status_capsule, alignment=Qt.AlignLeft)
+        container_layout.addSpacing(42)  # Status Capsule -> Grid 42px
+
+        # Grid Widget chứa Subject Cards
+        self.cards_widget = QWidget()
+        self.cards_widget.setObjectName("homeCardsContainer")
+        self.cards_widget.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.cards_widget.setAutoFillBackground(False)
+        self.cards_grid = QGridLayout(self.cards_widget)
+        self.cards_grid.setContentsMargins(0, 0, 0, 0)
+        self.cards_grid.setHorizontalSpacing(24)
+        self.cards_grid.setVerticalSpacing(24)
+        self.cards_grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+
+        container_layout.addWidget(self.cards_widget)
+        container_layout.addStretch(1)
+
+        self.canvas_layout.addWidget(self.content_container, alignment=Qt.AlignLeft | Qt.AlignTop)
+        self.canvas_layout.addStretch(1)
+
+        self.scroll_area.setWidget(self.canvas)
+        root_layout.addWidget(self.scroll_area)
+
+        # Timer debounce cho resizeEvent
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(40)
+        self._resize_timer.timeout.connect(self._reflow_grid)
 
     def set_subjects(self, subjects: list[Subject], data_dir: Path) -> None:
-        self.subjects.clear()
+        self._subjects_list = subjects
+        self._current_data_dir = data_dir
+
+        # Xóa các card cũ không thuộc danh sách môn học
+        new_names = {s.name for s in subjects}
+        for name in list(self._card_widgets.keys()):
+            if name not in new_names:
+                card = self._card_widgets.pop(name)
+                card.deleteLater()
+
+        # Cập nhật hoặc khởi tạo SubjectCard mà không hủy object cũ
         for subject in subjects:
-            counts = subject.category_counts
-            details = "  •  ".join(
-                f"{CATEGORY_LABELS[category]}: {counts.get(category, 0)}"
-                for category in CATEGORIES
-            )
-            item = QListWidgetItem(f"{subject.name} — {subject.question_count} câu\n{details}")
-            item.setData(Qt.UserRole, subject.name)
-            item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint()))
-            self.subjects.addItem(item)
-        if subjects:
-            self.notice.setText(f"Đã tìm thấy {len(subjects)} môn học trong {data_dir}")
-            self.subjects.setCurrentRow(0)
-        elif not data_dir.exists():
-            self.notice.setText(
-                f"Không tìm thấy thư mục dữ liệu: {data_dir}\n"
-                "Hãy tạo thư mục DATA hoặc chọn đường dẫn trong Cài đặt."
-            )
+            if subject.name in self._card_widgets:
+                self._card_widgets[subject.name].set_subject(subject)
+            else:
+                card = SubjectCard(subject)
+                card.selected.connect(self.subject_selected.emit)
+                self._card_widgets[subject.name] = card
+
+        if not subjects:
+            if not data_dir.exists():
+                self.status_capsule.set_missing_dir(data_dir)
+            else:
+                self.status_capsule.set_empty(data_dir)
         else:
-            self.notice.setText("Chưa có môn học nào. Hãy thêm thư mục môn học vào DATA.")
+            self.status_capsule.set_data_ready(len(subjects), data_dir)
+
+        self._reflow_grid(force=True)
 
     def set_loading(self, data_dir: Path) -> None:
-        self.notice.setText(f"Đang quét dữ liệu trong {data_dir}...")
+        self.status_capsule.set_loading(data_dir)
 
-    def _open_selected(self) -> None:
-        item = self.subjects.currentItem()
-        if item:
-            self.subject_selected.emit(str(item.data(Qt.UserRole)))
+    def update_theme(self) -> None:
+        self.canvas.update()
+        self.status_capsule.update_theme()
+        for card in self._card_widgets.values():
+            card.update_theme()
 
-    def _open_item(self, item: QListWidgetItem) -> None:
-        self.subject_selected.emit(str(item.data(Qt.UserRole)))
+    def _reflow_grid(self, force: bool = False) -> None:
+        if not self._subjects_list:
+            while self.cards_grid.count():
+                self.cards_grid.takeAt(0)
+            return
+
+        viewport_w = self.scroll_area.viewport().width()
+        if viewport_w <= 1280:
+            margin_h = 76
+        elif viewport_w <= 1600:
+            margin_h = 100
+        else:
+            margin_h = 140
+
+        self.canvas_layout.setContentsMargins(margin_h, 64, margin_h, 48)
+
+        available_w = min(viewport_w - (margin_h * 2), 1680)
+        cols = max(1, min(4, (available_w + 24) // 444))
+
+        if cols == self._current_cols and not force:
+            return
+
+        self._current_cols = cols
+
+        # Gỡ bỏ các card cũ khỏi layout grid mà KHÔNG delete object
+        while self.cards_grid.count():
+            self.cards_grid.takeAt(0)
+
+        # Thêm lại chính các SubjectCard widget cũ vào vị trí grid mới
+        for idx, subject in enumerate(self._subjects_list):
+            card = self._card_widgets.get(subject.name)
+            if card:
+                row = idx // cols
+                col = idx % cols
+                self.cards_grid.addWidget(card, row, col, Qt.AlignLeft | Qt.AlignTop)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._resize_timer.start()
 
 
 class ModeScreen(BasePage):
@@ -1649,7 +2018,23 @@ class SettingsScreen(BasePage):
         self, settings: AppSettings, preview_path: Path | None = None, answer_status: str = ""
     ):
         super().__init__()
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # ScrollArea cho SettingsScreen tương thích mọi độ phân giải (1100x700, 1280x800)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setObjectName("settingsScrollArea")
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.content_widget = QWidget()
+        self.content_widget.setObjectName("settingsContent")
+        layout = QVBoxLayout(self.content_widget)
+        layout.setContentsMargins(32, 24, 32, 32)
+        layout.setSpacing(20)
+
+        # Header back button & title
         top = QHBoxLayout()
         top.addWidget(self.back_button())
         title, subtitle = page_title("Cài đặt", "Tùy chỉnh giao diện, dữ liệu và vùng cắt đáp án.")
@@ -1658,9 +2043,14 @@ class SettingsScreen(BasePage):
         heading.addWidget(subtitle)
         top.addLayout(heading, 1)
         layout.addLayout(top)
+
+        # Form card
         card = QFrame()
         card.setObjectName("card")
         form = QFormLayout(card)
+        form.setContentsMargins(20, 16, 20, 16)
+        form.setSpacing(12)
+
         self.theme = QComboBox()
         self.theme.addItem("Giống hệ thống", "system")
         self.theme.addItem("Sáng", "light")
@@ -1672,6 +2062,7 @@ class SettingsScreen(BasePage):
         )
         self.theme.currentIndexChanged.connect(self._preview_theme)
         form.addRow("Giao diện", self.theme)
+
         path_widget = QWidget()
         path_layout = QHBoxLayout(path_widget)
         path_layout.setContentsMargins(0, 0, 0, 0)
@@ -1681,6 +2072,7 @@ class SettingsScreen(BasePage):
         path_layout.addWidget(self.data_path)
         path_layout.addWidget(browse)
         form.addRow("Thư mục DATA", path_widget)
+
         self.crop_values: list[QDoubleSpinBox] = []
         labels = ("Crop X (%)", "Crop Y (%)", "Crop rộng (%)", "Crop cao (%)")
         for label, value in zip(labels, settings.crop_region):
@@ -1691,29 +2083,64 @@ class SettingsScreen(BasePage):
             self.crop_values.append(spin)
             form.addRow(label, spin)
             spin.valueChanged.connect(self._update_preview_crop)
+
         if answer_status:
             status = QLabel(answer_status)
             status.setWordWrap(True)
             form.addRow("Trạng thái đáp án", status)
+
         layout.addWidget(card)
+
+        # Preview Section (LUÔN hiển thị section)
+        preview_label = QLabel("Xem trước ảnh sau khi cắt đáp án")
+        preview_label.setStyleSheet("font-size: 16px; font-weight: 700;")
+        layout.addWidget(preview_label)
+
         self.preview: QuestionImageViewer | None = None
-        if preview_path is not None:
-            preview_label = QLabel("Xem trước ảnh sau khi cắt đáp án")
-            preview_label.setStyleSheet("font-weight: 700")
-            layout.addWidget(preview_label)
+        self.placeholder_frame: QFrame | None = None
+
+        loaded_successfully = False
+        if preview_path is not None and preview_path.is_file():
             self.preview = QuestionImageViewer()
-            self.preview.setMinimumHeight(260)
+            self.preview.setMinimumHeight(320)
+            self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             try:
                 self.preview.load_image(preview_path)
                 self._update_preview_crop()
-            except ValueError:
-                self.preview = None
-            if self.preview is not None:
                 layout.addWidget(self.preview, 1)
-        layout.addStretch()
-        save = QPushButton("Lưu cài đặt")
-        save.clicked.connect(self._save)
-        layout.addWidget(save, alignment=Qt.AlignRight)
+                loaded_successfully = True
+            except (OSError, ValueError):
+                self.preview = None
+
+        if not loaded_successfully:
+            # Khung placeholder hiển thị thông báo rõ ràng khi không tìm thấy ảnh
+            self.placeholder_frame = QFrame()
+            self.placeholder_frame.setObjectName("settingsPreviewPlaceholder")
+            self.placeholder_frame.setMinimumHeight(200)
+            self.placeholder_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            p_layout = QVBoxLayout(self.placeholder_frame)
+            p_layout.setAlignment(Qt.AlignCenter)
+            p_text = QLabel("Không tìm thấy ảnh để xem trước.\nHãy kiểm tra thư mục DATA hoặc chọn lại thư mục dữ liệu.")
+            p_text.setObjectName("settingsPreviewPlaceholderText")
+            p_text.setAlignment(Qt.AlignCenter)
+            p_layout.addWidget(p_text)
+            layout.addWidget(self.placeholder_frame)
+
+        # Save button ở góc dưới-phải
+        save_layout = QHBoxLayout()
+        save_layout.addStretch(1)
+        self.save_button = QPushButton("Lưu cài đặt")
+        self.save_button.setObjectName("settingsSaveButton")
+        self.save_button.setFixedHeight(40)
+        self.save_button.setMinimumWidth(132)
+        self.save_button.setCursor(QCursor(Qt.PointingHandCursor))
+        self.save_button.clicked.connect(self._save)
+        save_layout.addWidget(self.save_button, alignment=Qt.AlignVCenter)
+
+        layout.addLayout(save_layout)
+
+        self.scroll_area.setWidget(self.content_widget)
+        root_layout.addWidget(self.scroll_area)
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Chọn thư mục DATA", self.data_path.text())
@@ -1751,7 +2178,7 @@ class SettingsScreen(BasePage):
 class HistoryScreen(BasePage):
     delete_requested = pyqtSignal(list)
 
-    def __init__(self, history: list[tuple[dict, list[dict]]]):
+    def __init__(self, history: list[dict]):
         super().__init__()
         layout = QVBoxLayout(self)
         top = QHBoxLayout()
@@ -1767,46 +2194,62 @@ class HistoryScreen(BasePage):
         top.addWidget(self.delete_button)
         layout.addLayout(top)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Bài thi / Câu", "Kết quả", "Thời gian"])
+        self.tree.setObjectName("examHistoryTree")
+        self.tree.setHeaderLabels(["Môn học / Bài thi", "Kết quả", "Thời gian"])
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.setIndentation(24)
         self.tree.itemSelectionChanged.connect(self._update_delete_button)
         layout.addWidget(self.tree, 1)
         if not history:
             empty = QTreeWidgetItem(["Chưa có bài thi nào", "", ""])
             empty.setFlags(empty.flags() & ~Qt.ItemIsSelectable)
             self.tree.addTopLevelItem(empty)
-        for attempt, answers in history:
-            root = QTreeWidgetItem(
+        subject_nodes: dict[str, QTreeWidgetItem] = {}
+        for attempt in history:
+            subject = str(attempt["subject"])
+            parent = subject_nodes.get(subject)
+            if parent is None:
+                parent = QTreeWidgetItem([f"📁 Môn học: {subject}", "", ""])
+                parent.setFlags(parent.flags() & ~Qt.ItemIsSelectable)
+                parent_font = parent.font(0)
+                parent_font.setBold(True)
+                for column in range(3):
+                    parent.setFont(column, parent_font)
+                    parent.setBackground(column, QColor("#D8DCE3"))
+                    parent.setForeground(column, QColor("#1D1D1F"))
+                self.tree.addTopLevelItem(parent)
+                self.tree.setFirstItemColumnSpanned(parent, True)
+                parent.setExpanded(True)
+                subject_nodes[subject] = parent
+            exam_item = QTreeWidgetItem(
                 [
-                    f"#{attempt['id']} — {attempt['subject']}",
+                    f"Bài thi #{attempt['id']}",
                     f"{attempt['score']:.2f}/10 ({attempt['score_percent']:.2f}%)",
-                    str(attempt["submitted_at"]),
+                    self._format_submitted_at(attempt["submitted_at"]),
                 ]
             )
-            root.setData(0, Qt.UserRole, int(attempt["id"]))
-            for answer in answers:
-                child = QTreeWidgetItem(
-                    [
-                        str(answer["relative_path"]),
-                        (
-                            f"Chọn {answer['selected_answer'] or '—'} / "
-                            f"Đúng {answer['correct_answer']}"
-                        ),
-                        f"{answer['awarded_score']:.2f} điểm",
-                    ]
-                )
-                child.setFlags(child.flags() & ~Qt.ItemIsSelectable)
-                root.addChild(child)
-            self.tree.addTopLevelItem(root)
+            exam_item.setData(0, Qt.UserRole, int(attempt["id"]))
+            parent.addChild(exam_item)
+
+    @staticmethod
+    def _format_submitted_at(value: object) -> str:
+        raw_value = str(value).strip()
+        try:
+            parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone().strftime("%d/%m/%Y %H:%M")
+        except ValueError:
+            return raw_value
 
     def selected_attempt_ids(self) -> list[int]:
         attempt_ids = {
             int(item.data(0, Qt.UserRole))
             for item in self.tree.selectedItems()
-            if item.parent() is None and item.data(0, Qt.UserRole) is not None
+            if item.parent() is not None and item.data(0, Qt.UserRole) is not None
         }
         return sorted(attempt_ids)
 

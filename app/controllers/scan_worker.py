@@ -23,6 +23,12 @@ class ScanTask(QRunnable):
         try:
             subjects = DataScannerService(self.data_dir).scan()
         except (OSError, RuntimeError, ValueError) as exc:
-            self.signals.failed.emit(self.data_dir, str(exc))
+            try:
+                self.signals.failed.emit(self.data_dir, str(exc))
+            except RuntimeError:
+                pass
             return
-        self.signals.completed.emit(self.data_dir, subjects)
+        try:
+            self.signals.completed.emit(self.data_dir, subjects)
+        except RuntimeError:
+            pass
