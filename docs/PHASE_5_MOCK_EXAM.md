@@ -52,12 +52,17 @@ question_score = max(
 - Log đường dẫn CSV tuyệt đối, tổng số dòng, số dòng map thành công, số dòng bị reject và lý do reject.
 - Nếu không tồn tại CSV, giao diện phải hiển thị chính xác đường dẫn file đang thiếu.
 
-### Adaptive learning và lấy mẫu có trọng số
+### Exam bank allocator: category, coverage và quota ôn lỗi
 
 - SQLite lưu `total_attempts` và `wrong_count` theo `question_id` trong bảng `question_error_stats`; `error_rate = wrong_count / total_attempts` được tính khi đọc.
 - Cramming ghi một lượt ngay khi người dùng nhấn `Enter`. Mock Exam chỉ ghi các câu đã trả lời khi bài được nộp; câu bỏ trống không làm tăng số lượt.
-- Trọng số tạo đề kết hợp trạng thái Flashcard, tỷ lệ sai, tổng số lần sai và số lần đúng. Câu đã thuộc hoặc đã trả lời đúng nhiều lần được giảm trọng số, còn câu sai thường xuyên được ưu tiên rõ rệt.
-- Lấy mẫu có trọng số được thực hiện không hoàn lại, vì vậy một câu không thể xuất hiện hai lần trong cùng đề.
+- SQLite đếm số lần mỗi câu đã xuất hiện trong các Mock Exam **đã nộp** từ bảng `exam_answers`. Bài thi thoát không lưu không được tính là một exposure.
+- `ExamBankAllocator` là component thuần, độc lập với SQLite và UI. `ExamService` chỉ chuẩn bị pool, error stats và exposure rồi giao toàn bộ việc phân phối cho allocator.
+- Quota category được tính theo tỷ trọng trong pool đủ điều kiện. Thuật toán constrained largest-remainder bảo đảm tổng quota luôn đúng bằng số câu của đề; khi số câu không nhỏ hơn số category, mỗi category được bảo vệ tối thiểu một chỗ.
+- Ví dụ ITE303c có `21 / 37 / 37 / 194` câu và đề 10 câu: quota thô lần lượt là `0.73 / 1.28 / 1.28 / 6.71`; quota hợp lệ là `1 / 1 / 1 / 7`. Cách này gần tỷ trọng gốc hơn phương án ceil độc lập (`1 / 2 / 2 / 6`, tổng 11).
+- Category có số câu lớn nhất dùng chiến lược coverage: luôn lấy từ tầng có số exposure thấp nhất trước. Vì vậy câu chưa từng xuất hiện được ưu tiên trước câu đã xuất hiện.
+- Các category thiểu số dành trung bình 40% quota cho nhóm từng trả lời sai, chọn có trọng số theo tỷ lệ/số lần sai. Stochastic rounding giữ đúng kỳ vọng 40/60 khi quota chỉ có 1–2 câu; phần còn lại lấy ngẫu nhiên không hoàn lại ngoài nhóm lỗi, chỉ dùng nhóm lỗi để bù khi pool còn lại không đủ.
+- Mọi lượt lấy mẫu đều không hoàn lại, vì vậy một câu không thể xuất hiện hai lần trong cùng đề.
 
 ## Tiêu chí nghiệm thu
 

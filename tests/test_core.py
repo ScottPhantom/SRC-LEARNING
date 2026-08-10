@@ -304,14 +304,16 @@ def test_delete_multiple_exam_attempts_cascades_answer_details(
     database.close()
 
 
-def test_exam_weighted_sampling_prioritizes_frequent_errors(tmp_path: Path) -> None:
-    subject = make_questions(tmp_path / "DATA", 2)
+def test_exam_sampling_guarantees_coverage_for_a_dominant_category(
+    tmp_path: Path,
+) -> None:
+    subject = make_questions(tmp_path / "DATA", 20)
     database = Database(tmp_path / "weighted.sqlite3")
     database.sync_questions(subject.questions, [subject.name])
-    difficult, known = subject.questions
-    for _ in range(10):
-        database.record_question_attempt(difficult.id, correct=False)
-    database.rate_card(known.id, known=True)
+    difficult = subject.questions[:7]
+    for question in difficult:
+        for _ in range(3):
+            database.record_question_attempt(question.id, correct=False)
     answers = {question.relative_path: "A" for question in subject.questions}
     service = ExamService(
         database,
@@ -322,28 +324,89 @@ def test_exam_weighted_sampling_prioritizes_frequent_errors(tmp_path: Path) -> N
     config = ExamConfig(
         subject=subject.name,
         categories=("Selections_1_choose",),
-        question_count=1,
+        question_count=10,
         duration_minutes=30,
         feedback_mode=FeedbackMode.DEFERRED,
     )
 
-    chosen_ids = [service.create_session(config).current.question.id for _ in range(200)]
+    seen: set[str] = set()
+    for _ in range(3):
+        session = service.create_session(config)
+        selected_ids = {item.question.id for item in session.items}
+        assert len(selected_ids) == 10
+        seen.update(selected_ids)
+        session.submit()
 
-    assert chosen_ids.count(difficult.id) > 180
-    assert chosen_ids.count(difficult.id) > chosen_ids.count(known.id)
-    difficult_stat = database.question_error_stats([difficult.id])[difficult.id]
-    known_stat = database.question_error_stats([known.id])[known.id]
-    assert service.question_weight(difficult_stat) > service.question_weight(known_stat)
-    full_exam = service.create_session(
-        ExamConfig(
-            subject=subject.name,
-            categories=("Selections_1_choose",),
-            question_count=2,
-            duration_minutes=30,
-            feedback_mode=FeedbackMode.DEFERRED,
-        )
+    assert seen == {question.id for question in subject.questions}
+    exposures = database.question_exam_exposure_counts(
+        [question.id for question in subject.questions]
     )
-    assert len({item.question.id for item in full_exam.items}) == 2
+    assert min(exposures.values()) >= 1
+    database.close()
+
+
+def test_small_exams_cycle_through_least_exposed_questions(tmp_path: Path) -> None:
+    subject = make_questions(tmp_path / "DATA", 5)
+    database = Database(tmp_path / "small-balanced.sqlite3")
+    database.sync_questions(subject.questions, [subject.name])
+    difficult = subject.questions[0]
+    for _ in range(10):
+        database.record_question_attempt(difficult.id, correct=False)
+    service = ExamService(
+        database,
+        subject.questions,
+        {question.relative_path: "A" for question in subject.questions},
+        rng=random.Random(2026),
+    )
+    config = ExamConfig(
+        subject=subject.name,
+        categories=("Selections_1_choose",),
+        question_count=1,
+        duration_minutes=10,
+        feedback_mode=FeedbackMode.DEFERRED,
+    )
+
+    selected_ids = []
+    for _ in range(5):
+        session = service.create_session(config)
+        selected_ids.append(session.current.question.id)
+        session.submit()
+
+    assert len(set(selected_ids)) == 5
+    assert set(selected_ids) == {question.id for question in subject.questions}
+    database.close()
+
+
+def test_exam_exposure_counts_follow_saved_and_deleted_attempts(tmp_path: Path) -> None:
+    subject = make_questions(tmp_path / "DATA", 3)
+    database = Database(tmp_path / "exposure.sqlite3")
+    database.sync_questions(subject.questions, [subject.name])
+    service = ExamService(
+        database,
+        subject.questions,
+        {question.relative_path: "A" for question in subject.questions},
+        rng=random.Random(7),
+    )
+    config = ExamConfig(
+        subject=subject.name,
+        categories=("Selections_1_choose",),
+        question_count=2,
+        duration_minutes=10,
+        feedback_mode=FeedbackMode.DEFERRED,
+    )
+
+    result = service.create_session(config).submit()
+    counts = database.question_exam_exposure_counts(
+        [question.id for question in subject.questions]
+    )
+    assert sorted(counts.values()) == [0, 1, 1]
+
+    database.delete_exam_attempts([result.attempt_id])
+    assert set(
+        database.question_exam_exposure_counts(
+            [question.id for question in subject.questions]
+        ).values()
+    ) == {0}
     database.close()
 
 
