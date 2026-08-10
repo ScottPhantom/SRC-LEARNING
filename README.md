@@ -52,7 +52,7 @@ Câu không có đáp án hợp lệ vẫn dùng được trong Flashcard; Cramm
 
 ```powershell
 py -3.11 -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
@@ -76,6 +76,19 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
+
+### Tự động kích hoạt môi trường (không bắt buộc)
+
+Repository có `.envrc` dùng được với `direnv` trên macOS, Linux, WSL và các
+terminal tương thích POSIX. File tự nhận diện cả cấu trúc `.venv/bin` và
+`.venv/Scripts`, đồng thời bỏ qua an toàn nếu virtual environment chưa được tạo:
+
+```bash
+direnv allow
+```
+
+`.envrc` không phải điều kiện bắt buộc để chạy ứng dụng. Trên Windows PowerShell
+hoặc Command Prompt, sử dụng lệnh kích hoạt tương ứng trong phần Windows ở trên.
 
 Kiểm tra Tesseract:
 
