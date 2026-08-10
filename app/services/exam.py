@@ -14,6 +14,7 @@ from app.domain.models import (
 )
 from app.repositories.answer_key import AnswerKeyRepository, normalize_relative_path
 from app.repositories.database import Database
+from app.services.exam_bank import ExamBankAllocator
 
 
 def utc_now() -> str:
@@ -133,6 +134,7 @@ class ExamService:
         self.database = database
         self.questions = list(questions)
         self.rng = rng or random.SystemRandom()
+        self.bank_allocator = ExamBankAllocator(self.rng)
         self.answers = {
             normalize_relative_path(path): normalize_answer(answer)
             for path, answer in answers.items()
@@ -154,39 +156,7 @@ class ExamService:
 
     @staticmethod
     def question_weight(stat: QuestionErrorStat) -> float:
-        """Ưu tiên lỗi sai và giảm dần trọng số khi đã trả lời đúng nhiều."""
-        base = {"known": 0.45, "learning": 1.15}.get(stat.card_state, 1.0)
-        error_boost = 5.0 * stat.error_rate
-        repeated_error_boost = min(4.0, 0.5 * stat.wrong_count)
-        correct_count = max(0, stat.total_attempts - stat.wrong_count)
-        mastery_discount = min(0.65, 0.04 * correct_count)
-        return max(
-            0.1,
-            base + error_boost + repeated_error_boost - mastery_discount,
-        )
-
-    def weighted_sample_without_replacement(
-        self,
-        questions: Sequence[Question],
-        weights: Sequence[float],
-        amount: int,
-    ) -> list[Question]:
-        """Lấy mẫu có trọng số, mỗi câu xuất hiện tối đa một lần."""
-        available = list(zip(questions, weights, strict=True))
-        selected: list[Question] = []
-        for _ in range(amount):
-            total_weight = sum(weight for _, weight in available)
-            threshold = self.rng.random() * total_weight
-            cumulative = 0.0
-            chosen_index = len(available) - 1
-            for index, (_question, weight) in enumerate(available):
-                cumulative += weight
-                if threshold < cumulative:
-                    chosen_index = index
-                    break
-            question, _weight = available.pop(chosen_index)
-            selected.append(question)
-        return selected
+        return ExamBankAllocator.error_weight(stat)
 
     def create_session(self, config: ExamConfig) -> ExamSession:
         if config.question_count <= 0:
@@ -203,11 +173,13 @@ class ExamService:
         stats = self.database.question_error_stats(
             [question.id for question in pool]
         )
-        weights = [
-            self.question_weight(stats.get(question.id, QuestionErrorStat(question.id)))
-            for question in pool
-        ]
-        selected = self.weighted_sample_without_replacement(
-            pool, weights, config.question_count
+        exposure_counts = self.database.question_exam_exposure_counts(
+            [question.id for question in pool]
+        )
+        selected = self.bank_allocator.select(
+            pool,
+            config.question_count,
+            stats,
+            exposure_counts,
         )
         return ExamSession(self.database, config, selected)

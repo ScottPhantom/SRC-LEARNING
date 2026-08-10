@@ -174,7 +174,7 @@ python main.py
 5. Bài thi đang dở không được khôi phục. Khi bấm Quay lại, `📖` hoặc đóng ứng dụng, hộp thoại cho phép `Cancel`, `Yes — Nộp và Thoát` để chấm/lưu lịch sử, hoặc `No — Thoát và Không lưu`.
 6. Lưới điều hướng đổi xanh `#30D158` cho câu đúng, đỏ `#FF453A` cho câu sai, nền sẫm cho câu đã trả lời và viền xanh dương cho câu hiện tại.
 7. Có thể click trực tiếp một ô số để chuyển câu (chế độ chấm ngay yêu cầu xác nhận câu hiện tại trước).
-8. Khi tạo đề, các câu từng sai nhiều được lấy mẫu ngẫu nhiên với trọng số cao hơn; câu đã trả lời đúng nhiều lần được giảm trọng số. Thuật toán vẫn bảo đảm không trùng câu trong cùng một đề.
+8. `ExamBankAllocator` chia số câu theo tỷ trọng category bằng constrained largest-remainder. Category lớn nhất ưu tiên câu có exposure thấp để phủ ngân hàng; mỗi category thiểu số dành khoảng 40% quota cho câu từng sai và lấy ngẫu nhiên phần còn lại. Tổng quota luôn đúng số câu của đề và không có câu trùng trong cùng đề.
 9. Màn hình kết quả có menu `↻ RE-Test`: tạo ngay đề mới bằng đúng cấu hình vừa dùng hoặc quay về màn hình cấu hình để chọn option khác.
 10. Kết quả chi tiết hiển thị bằng bảng 3 cột `NO / Correct answer / Điểm`; chọn một hàng để mở ảnh review. Hàng Total hiển thị tổng điểm và `PASS` từ 7.0 điểm trở lên, ngược lại là `FAIL`.
 11. Lịch sử bài thi cho phép chọn nhiều bài bằng `Ctrl/Cmd` hoặc `Shift`, sau đó dùng `🗑️ Xóa bài thi`. Việc xóa luôn yêu cầu xác nhận và xóa cascade toàn bộ chi tiết câu trả lời liên quan.
