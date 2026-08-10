@@ -551,6 +551,19 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
     connection.commit()
     connection.close()
     database = Database(path)
+    backups = list(tmp_path.glob("legacy.pre-v1.*.sqlite3"))
+    assert backups == [database.migration_backup_path]
+    with sqlite3.connect(backups[0]) as backup:
+        assert backup.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert backup.execute("SELECT version FROM schema_version").fetchone()[0] == 1
+        assert (
+            backup.execute("SELECT score_percent FROM exam_attempts").fetchone()[0]
+            == 50.0
+        )
+        legacy_columns = {
+            row[1] for row in backup.execute("PRAGMA table_info(exam_attempts)")
+        }
+        assert "score" not in legacy_columns
     attempt = database.exam_history()[0]
     assert attempt["score"] == 5.0
     assert [row["awarded_score"] for row in database.exam_detail(1)] == [5.0, 0.0]
@@ -564,6 +577,56 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
     }
     assert "question_error_stats" in tables
     database.close()
+
+
+def test_database_does_not_backup_new_or_current_schema(tmp_path: Path) -> None:
+    path = tmp_path / "current.sqlite3"
+    database = Database(path)
+    assert database.migration_backup_path is None
+    database.close()
+
+    reopened = Database(path)
+    assert reopened.migration_backup_path is None
+    reopened.close()
+    assert list(tmp_path.glob("current.pre-v*.*.sqlite3")) == []
+
+
+def test_database_aborts_migration_when_backup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "backup-failure.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE schema_version(version INTEGER NOT NULL);
+            INSERT INTO schema_version VALUES(1);
+            CREATE TABLE preserved(value TEXT NOT NULL);
+            INSERT INTO preserved VALUES('still here');
+            """
+        )
+
+    def fail_backup(self: Database, previous_version: int) -> Path:
+        raise OSError(f"Không thể backup schema v{previous_version}")
+
+    monkeypatch.setattr(Database, "_create_migration_backup", fail_backup)
+    with pytest.raises(OSError, match="Không thể backup schema v1"):
+        Database(path)
+
+    with sqlite3.connect(path) as unchanged:
+        assert (
+            unchanged.execute("SELECT version FROM schema_version").fetchone()[0] == 1
+        )
+        assert (
+            unchanged.execute("SELECT value FROM preserved").fetchone()[0]
+            == "still here"
+        )
+        tables = {
+            row[0]
+            for row in unchanged.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "exam_attempts" not in tables
 
 
 def test_thirty_fully_correct_questions_total_exactly_ten(tmp_path: Path) -> None:
