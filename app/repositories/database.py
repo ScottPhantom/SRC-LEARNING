@@ -463,6 +463,31 @@ class Database:
             for row in rows
         }
 
+    def question_exam_exposure_counts(
+        self, question_ids: Sequence[str]
+    ) -> dict[str, int]:
+        """Return how often each question appeared in a submitted Mock Exam.
+
+        Exposure is derived from ``exam_answers`` so deleting an exam also removes
+        its contribution. Questions that have never appeared are returned with 0.
+        """
+        ids = list(dict.fromkeys(question_ids))
+        counts = {question_id: 0 for question_id in ids}
+        # Keep below SQLite's common 999-variable limit for large subjects.
+        for offset in range(0, len(ids), 900):
+            chunk = ids[offset : offset + 900]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self._connection.execute(
+                f"""SELECT question_id, COUNT(*) appearances
+                FROM exam_answers
+                WHERE question_id IN ({placeholders})
+                GROUP BY question_id""",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                counts[str(row["question_id"])] = int(row["appearances"])
+        return counts
+
     # Cramming ----------------------------------------------------------
     def active_cram_cycle(self, subject: str) -> sqlite3.Row | None:
         return self._connection.execute(
