@@ -91,6 +91,12 @@ class QuestionErrorStat:
 
 
 @dataclass(slots=True, frozen=True)
+class LearningQuestionReview:
+    question: Question
+    correct_answer: str
+
+
+@dataclass(slots=True, frozen=True)
 class WeakQuestionReview:
     question: Question
     correct_answer: str
