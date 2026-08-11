@@ -10,6 +10,10 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "study_progress.sqlite3"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "docs"
+
 CATEGORY_COLORS = {
     "Selections_1_choose": "#246BFD",
     "Selections_Multiple_choose": "#8B5CF6",
@@ -379,10 +383,18 @@ def write_csv(rows: list[dict[str, object]], destination: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze Mock Exam question exposure.")
-    parser.add_argument("--database", type=Path, default=Path("study_progress.sqlite3"))
+    parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE_PATH)
     parser.add_argument("--subject")
-    parser.add_argument("--output-dir", type=Path, default=Path("docs"))
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
+
+
+def open_database(database_path: Path) -> sqlite3.Connection:
+    """Open the existing progress database without ever creating a new file."""
+    resolved_path = database_path.expanduser().resolve()
+    if not resolved_path.is_file():
+        raise FileNotFoundError(f"Không tìm thấy database: {resolved_path}")
+    return sqlite3.connect(f"{resolved_path.as_uri()}?mode=ro", uri=True)
 
 
 def safe_path_component(value: str) -> str:
@@ -416,32 +428,31 @@ def reserve_output_paths(
 
 def main() -> None:
     args = parse_args()
-    connection = sqlite3.connect(args.database)
-    generated_at = datetime.now().astimezone()
-    subjects = [
-        str(row[0])
-        for row in connection.execute(
-            "SELECT DISTINCT subject FROM questions WHERE active=1 ORDER BY subject"
-        )
-    ]
-    if args.subject:
-        subjects = [args.subject]
-    for subject in subjects:
-        rows = load_rows(connection, subject)
-        if not rows:
-            continue
-        exam_count = int(
-            connection.execute(
-                "SELECT COUNT(*) FROM exam_attempts WHERE subject=?", (subject,)
-            ).fetchone()[0]
-        )
-        png_path, csv_path = reserve_output_paths(
-            args.output_dir, subject, generated_at
-        )
-        make_figure(rows, exam_count, subject, png_path)
-        write_csv(rows, csv_path)
-        print(f"{subject}: {png_path} | {csv_path}")
-    connection.close()
+    with open_database(args.database) as connection:
+        generated_at = datetime.now().astimezone()
+        subjects = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT DISTINCT subject FROM questions WHERE active=1 ORDER BY subject"
+            )
+        ]
+        if args.subject:
+            subjects = [args.subject]
+        for subject in subjects:
+            rows = load_rows(connection, subject)
+            if not rows:
+                continue
+            exam_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM exam_attempts WHERE subject=?", (subject,)
+                ).fetchone()[0]
+            )
+            png_path, csv_path = reserve_output_paths(
+                args.output_dir, subject, generated_at
+            )
+            make_figure(rows, exam_count, subject, png_path)
+            write_csv(rows, csv_path)
+            print(f"{subject}: {png_path} | {csv_path}")
 
 
 if __name__ == "__main__":

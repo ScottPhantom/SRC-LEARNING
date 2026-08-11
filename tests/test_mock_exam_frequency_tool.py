@@ -4,7 +4,30 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from tools.analyze_mock_exam_frequency import make_figure, reserve_output_paths
+from tools.analyze_mock_exam_frequency import (
+    DEFAULT_DATABASE_PATH,
+    PROJECT_ROOT,
+    make_figure,
+    open_database,
+    reserve_output_paths,
+)
+
+
+def test_default_database_is_anchored_to_project_root() -> None:
+    assert DEFAULT_DATABASE_PATH == PROJECT_ROOT / "study_progress.sqlite3"
+
+
+def test_open_database_does_not_create_a_missing_file(tmp_path) -> None:
+    missing_database = tmp_path / "study_progress.sqlite3"
+
+    try:
+        open_database(missing_database)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("Expected a missing database to be rejected")
+
+    assert not missing_database.exists()
 
 
 def test_output_paths_use_subject_date_and_unique_timestamp(tmp_path) -> None:
