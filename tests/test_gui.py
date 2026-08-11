@@ -24,6 +24,7 @@ from app.domain.models import (
     AppSettings,
     ExamConfig,
     FeedbackMode,
+    LearningQuestionReview,
     Question,
     WeakQuestionReview,
 )
@@ -461,7 +462,7 @@ def test_subject_view_cards_dashboard_and_quick_review(tmp_path: Path) -> None:
     cards_container = screen.findChild(QWidget, "studyModeCardsContainer")
     assert cards_container is not None
     assert cards_container.height() == 337
-    dashboard_top = screen.dashboard_tabs.geometry().top()
+    dashboard_top = screen.statistics_tabs.geometry().top()
     assert not any(
         button.text() == "Bắt đầu" for button in screen.findChildren(QPushButton)
     )
@@ -469,6 +470,14 @@ def test_subject_view_cards_dashboard_and_quick_review(tmp_path: Path) -> None:
     screen.mode_selected.connect(selected_modes.append)
     QTest.mouseClick(screen.mode_cards["flash"], Qt.LeftButton)
     assert selected_modes == ["flash"]
+
+    assert screen.dashboard_heading.text() == (
+        f"Thống kê môn {subject.name} & Ôn tập nhanh"
+    )
+    assert [
+        screen.statistics_tabs.tabText(index)
+        for index in range(screen.statistics_tabs.count())
+    ] == ["Câu chưa học", "Lỗi sai"]
 
     assert screen.dashboard_tabs.count() == 4
     assert [
@@ -490,7 +499,7 @@ def test_subject_view_cards_dashboard_and_quick_review(tmp_path: Path) -> None:
     assert card.property("hovered") is True
     assert card.minimumWidth() == card.minimumHeight() == 317
     assert card.shadow.blurRadius() >= 54
-    assert screen.dashboard_tabs.geometry().top() == dashboard_top
+    assert screen.statistics_tabs.geometry().top() == dashboard_top
     assert all(other.focus_overlay.isVisible() for other in other_cards)
     assert all(other.focus_overlay_effect.opacity() >= 0.49 for other in other_cards)
     QApplication.sendEvent(card, QEvent(QEvent.Leave))
@@ -541,6 +550,7 @@ def test_quick_review_opens_with_space_and_navigates_current_tab(
     )
     screen.resize(1280, 800)
     screen.show()
+    screen.statistics_tabs.setCurrentIndex(1)
     table = screen.weak_tables["Selections_1_choose"]
     screen.dashboard_tabs.setCurrentWidget(table)
     table.selectRow(1)
@@ -573,6 +583,86 @@ def test_quick_review_opens_with_space_and_navigates_current_tab(
     QT_APP.processEvents()
     assert not dialog.isVisible()
     screen.close()
+
+
+def test_learning_dashboard_rates_cards_and_updates_progress_directly(
+    tmp_path: Path,
+) -> None:
+    subject = make_subject(tmp_path, 3)
+    database = Database(tmp_path / "learning-dashboard.sqlite3")
+    database.sync_questions(subject.questions, [subject.name])
+    for question in subject.questions:
+        database.rate_card(question.id, known=False)
+    report = AnswerKeyReport(
+        csv_path=subject.path / "answers.csv",
+        file_found=True,
+        total_rows=3,
+        answers={
+            question.relative_path: answer
+            for question, answer in zip(subject.questions, "ABC", strict=True)
+        },
+    )
+    learning_reviews = [
+        LearningQuestionReview(
+            question=question,
+            correct_answer=report.answers[question.relative_path],
+        )
+        for question in subject.questions
+    ]
+    screen = ModeScreen(
+        subject,
+        report,
+        database.card_stats(subject.name),
+        {},
+        (0.0, 0.9, 0.25, 0.1),
+        learning_questions={"Selections_1_choose": learning_reviews},
+    )
+    screen.learning_status_changed.connect(database.rate_card)
+    screen.resize(1280, 800)
+    screen.show()
+    table = screen.learning_tables["Selections_1_choose"]
+    screen.learning_tabs.setCurrentWidget(table)
+    QT_APP.processEvents()
+
+    assert table.columnCount() == 2
+    assert [
+        table.horizontalHeaderItem(index).text() for index in range(2)
+    ] == ["Câu hỏi", "Trạng thái"]
+    assert [table.item(row, 0).text() for row in range(table.rowCount())] == [
+        question.absolute_path.name for question in subject.questions
+    ]
+    assert all(
+        table.item(row, 1).text() == "Chưa thuộc"
+        and table.item(row, 1).foreground().color() == QColor("#FF453A")
+        for row in range(table.rowCount())
+    )
+
+    table.cellDoubleClicked.emit(0, 0)
+    QT_APP.processEvents()
+    dialog = screen.quick_review_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert dialog.known_button is not None
+    assert dialog.learning_button is not None
+
+    QTest.mouseClick(dialog.learning_button, Qt.LeftButton)
+    assert database.card_stats(subject.name)["learning"] == 3
+    assert dialog.current_index == 1
+
+    rated_known_id = subject.questions[1].id
+    QTest.mouseClick(dialog.known_button, Qt.LeftButton)
+    QT_APP.processEvents()
+    assert rated_known_id not in database.learning_question_ids(subject.name)
+    assert table.rowCount() == 2
+    assert [table.item(row, 0).text() for row in range(2)] == [
+        subject.questions[0].absolute_path.name,
+        subject.questions[2].absolute_path.name,
+    ]
+    assert "1 đã thuộc" in screen.progress_summary.text()
+    assert "2 chưa thuộc" in screen.progress_summary.text()
+
+    dialog.close()
+    screen.close()
+    database.close()
 
 
 def test_main_window_fades_between_subject_and_study_screens(tmp_path: Path) -> None:

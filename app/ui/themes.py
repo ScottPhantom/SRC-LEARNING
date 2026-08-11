@@ -46,23 +46,32 @@ QLabel#studyModeDescription {
 }
 QLabel#subjectProgressSummary { color: #475569; font-weight: 650; }
 QLabel#dashboardHeading { color: #172033; font-size: 19px; font-weight: 800; }
-QTabWidget#weaknessDashboard::pane {
+QTabWidget#statisticsDashboard::pane { background: transparent; border: 0; }
+QTabBar#statisticsTypeTabs::tab {
+  background: #dce4f0; color: #334155; border: 0; min-width: 180px;
+  padding: 10px 24px; margin-right: 4px;
+  border-top-left-radius: 8px; border-top-right-radius: 8px; font-weight: 800;
+}
+QTabBar#statisticsTypeTabs::tab:selected { background: #ffffff; color: #0A84FF; }
+QTabWidget#learningDashboard::pane, QTabWidget#weaknessDashboard::pane {
   background: #ffffff; border: 1px solid #dce2ec; border-radius: 10px;
 }
-QTabWidget#weaknessDashboard QTabBar::tab {
+QTabWidget#learningDashboard QTabBar::tab, QTabWidget#weaknessDashboard QTabBar::tab {
   background: #e8edf5; color: #475569; border: 0; min-width: 130px;
   padding: 8px 16px;
   margin-right: 3px; border-top-left-radius: 7px; border-top-right-radius: 7px;
   font-weight: 700;
 }
+QTabWidget#learningDashboard QTabBar::tab:selected,
 QTabWidget#weaknessDashboard QTabBar::tab:selected {
   background: #ffffff; color: #0A84FF;
 }
-QTableWidget#weakQuestionTable {
+QTableWidget#learningQuestionTable, QTableWidget#weakQuestionTable {
   background: #ffffff; alternate-background-color: #f7f9fc; color: #172033;
   border: 0; gridline-color: #e5e9f0; selection-background-color: #dbeafe;
   selection-color: #172033;
 }
+QTableWidget#learningQuestionTable QHeaderView::section,
 QTableWidget#weakQuestionTable QHeaderView::section {
   background: #eef2f7; color: #334155; border: 0;
   border-bottom: 1px solid #cbd5e1; padding: 7px; font-weight: 800;
@@ -211,23 +220,32 @@ QLabel#studyModeDescription {
 }
 QLabel#subjectProgressSummary { color: #cbd5e1; font-weight: 650; }
 QLabel#dashboardHeading { color: #f8fafc; font-size: 19px; font-weight: 800; }
-QTabWidget#weaknessDashboard::pane {
+QTabWidget#statisticsDashboard::pane { background: transparent; border: 0; }
+QTabBar#statisticsTypeTabs::tab {
+  background: #111827; color: #cbd5e1; border: 0; min-width: 180px;
+  padding: 10px 24px; margin-right: 4px;
+  border-top-left-radius: 8px; border-top-right-radius: 8px; font-weight: 800;
+}
+QTabBar#statisticsTypeTabs::tab:selected { background: #1f2937; color: #60a5fa; }
+QTabWidget#learningDashboard::pane, QTabWidget#weaknessDashboard::pane {
   background: #1f2937; border: 1px solid #374151; border-radius: 10px;
 }
-QTabWidget#weaknessDashboard QTabBar::tab {
+QTabWidget#learningDashboard QTabBar::tab, QTabWidget#weaknessDashboard QTabBar::tab {
   background: #172033; color: #94a3b8; border: 0; min-width: 130px;
   padding: 8px 16px;
   margin-right: 3px; border-top-left-radius: 7px; border-top-right-radius: 7px;
   font-weight: 700;
 }
+QTabWidget#learningDashboard QTabBar::tab:selected,
 QTabWidget#weaknessDashboard QTabBar::tab:selected {
   background: #1f2937; color: #60a5fa;
 }
-QTableWidget#weakQuestionTable {
+QTableWidget#learningQuestionTable, QTableWidget#weakQuestionTable {
   background: #1f2937; alternate-background-color: #182132; color: #f8fafc;
   border: 0; gridline-color: #374151; selection-background-color: #1e3a5f;
   selection-color: #ffffff;
 }
+QTableWidget#learningQuestionTable QHeaderView::section,
 QTableWidget#weakQuestionTable QHeaderView::section {
   background: #273345; color: #cbd5e1; border: 0;
   border-bottom: 1px solid #4b5563; padding: 7px; font-weight: 800;

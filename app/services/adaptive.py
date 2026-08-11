@@ -3,12 +3,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from app.config import CATEGORIES
-from app.domain.models import Question, WeakQuestionReview, normalize_answer
+from app.domain.models import (
+    LearningQuestionReview,
+    Question,
+    WeakQuestionReview,
+    normalize_answer,
+)
 from app.repositories.database import Database
 
 
 class AdaptiveReviewService:
-    """Chuẩn bị dữ liệu góc yếu điểm, độc lập hoàn toàn với PyQt5."""
+    """Chuẩn bị dữ liệu thống kê ôn tập, độc lập hoàn toàn với PyQt5."""
 
     def __init__(
         self,
@@ -19,6 +24,29 @@ class AdaptiveReviewService:
         self.database = database
         self.questions = list(questions)
         self.answers = dict(answers)
+
+    def learning_by_category(self) -> dict[str, list[LearningQuestionReview]]:
+        """Trả về toàn bộ câu Chưa thuộc, giữ nguyên thứ tự file đã quét."""
+        result: dict[str, list[LearningQuestionReview]] = {
+            category: [] for category in CATEGORIES
+        }
+        learning_ids = set(
+            self.database.learning_question_ids(
+                self.questions[0].subject if self.questions else ""
+            )
+        )
+        for question in self.questions:
+            if question.id not in learning_ids:
+                continue
+            result.setdefault(question.category, []).append(
+                LearningQuestionReview(
+                    question=question,
+                    correct_answer=normalize_answer(
+                        self.answers.get(question.relative_path, "")
+                    ),
+                )
+            )
+        return result
 
     def top_errors_by_category(
         self, limit: int = 20
