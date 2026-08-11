@@ -9,6 +9,7 @@ from PyQt5.QtCore import (
     QFileSystemWatcher,
     QPropertyAnimation,
     QSequentialAnimationGroup,
+    Qt,
     QThreadPool,
     QTimer,
 )
@@ -19,7 +20,6 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QStackedWidget,
     QVBoxLayout,
-    QWidget,
 )
 
 from app.config import APP_NAME, DEFAULT_DATA_DIR
@@ -30,6 +30,7 @@ from app.repositories.database import Database
 from app.services.adaptive import AdaptiveReviewService
 from app.services.exam import ExamResult, ExamService, ExamSession
 from app.services.study import CrammingService, FlashcardService
+from app.ui.background import AppShell
 from app.ui.screens import (
     AppHeader,
     CrammingScreen,
@@ -64,15 +65,22 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(QByteArray.fromHex(geometry.encode("ascii")))
         # Khởi động nhất quán ở kích thước thiết kế; restoreGeometry vẫn giữ vị trí.
         self.resize(1280, 800)
-        shell = QWidget()
+        shell = AppShell()
         shell.setObjectName("appShell")
+        self.shell = shell
         shell_layout = QVBoxLayout(shell)
         shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
         self.app_header = AppHeader()
         self.app_header.home_requested.connect(self.show_home)
+        self.app_header.history_requested.connect(self.show_history)
+        self.app_header.refresh_requested.connect(self.refresh_data)
+        self.app_header.settings_requested.connect(self.show_settings)
         shell_layout.addWidget(self.app_header)
         self.stack = QStackedWidget()
+        self.stack.setObjectName("contentStack")
+        self.stack.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.stack.setAutoFillBackground(False)
         shell_layout.addWidget(self.stack, 1)
         self.setCentralWidget(shell)
         self.home = HomeScreen()
@@ -95,10 +103,12 @@ class MainWindow(QMainWindow):
         self._scan_running = False
         self._rescan_requested = False
         self.theme_manager = ThemeManager(QApplication.instance())
-        self.theme_manager.apply(self.settings.theme)
+        self._apply_theme(self.settings.theme)
         self.refresh_data()
 
     def _set_dynamic_page(self, page, animate: bool = False) -> None:
+        self.app_header.set_home_mode(False)
+        self.shell.set_home_background_active(False)
         previous = self._dynamic_page
         self._dynamic_page = page
         self.stack.addWidget(page)
@@ -152,6 +162,8 @@ class MainWindow(QMainWindow):
         self._transition_group = None
         self._transition_in_progress = False
         self.stack.setCurrentWidget(self.home)
+        self.app_header.set_home_mode(True)
+        self.shell.set_home_background_active(True)
         for index in range(self.stack.count() - 1, -1, -1):
             page = self.stack.widget(index)
             if page is self.home:
@@ -164,7 +176,9 @@ class MainWindow(QMainWindow):
     def _show_home_now(self) -> None:
         self.active_exam_screen = None
         self.current_subject = None
-        self.theme_manager.apply(self.settings.theme)
+        self.app_header.set_home_mode(True)
+        self.shell.set_home_background_active(True)
+        self._apply_theme(self.settings.theme)
         self._clear_dynamic_pages()
         self.refresh_data()
 
@@ -285,19 +299,22 @@ class MainWindow(QMainWindow):
             return
         self.current_subject = subject
         report = self.answer_reports[subject.name]
+        review_service = AdaptiveReviewService(
+            self.database,
+            subject.questions,
+            report.answers,
+        )
         page = ModeScreen(
             subject,
             report,
             self.database.card_stats(subject.name),
-            AdaptiveReviewService(
-                self.database,
-                subject.questions,
-                report.answers,
-            ).top_errors_by_category(),
+            review_service.top_errors_by_category(),
             self.settings.crop_region,
+            learning_questions=review_service.learning_by_category(),
         )
         page.back_requested.connect(self.show_home)
         page.mode_selected.connect(self._open_mode)
+        page.learning_status_changed.connect(self.database.rate_card)
         self._set_dynamic_page(page)
 
     def _open_mode(self, mode: str) -> None:
@@ -395,24 +412,38 @@ class MainWindow(QMainWindow):
             return
         self.start_exam(session)
 
+    def _apply_theme(self, theme_name: str) -> None:
+        self.theme_manager.apply(theme_name)
+        if hasattr(self, "app_header"):
+            self.app_header.update_theme()
+        if hasattr(self, "home"):
+            self.home.update_theme()
+        if self._dynamic_page is not None and hasattr(self._dynamic_page, "update_theme"):
+            self._dynamic_page.update_theme()
+
     def show_settings(self) -> None:
-        preview_path = None
-        for subject in self.subjects.values():
-            if subject.questions:
-                preview_path = subject.questions[0].absolute_path
-                break
+        # Tìm đường dẫn ảnh câu hỏi hợp lệ đầu tiên từ các môn học (sắp xếp tên môn cố định)
+        preview_path = next(
+            (
+                question.absolute_path
+                for subject in sorted(self.subjects.values(), key=lambda s: s.name)
+                for question in subject.questions
+                if question.absolute_path and question.absolute_path.is_file()
+            ),
+            None,
+        )
         valid = sum(report.valid_count for report in self.answer_reports.values())
         missing = sum(len(report.missing) for report in self.answer_reports.values())
         invalid = sum(len(report.invalid) for report in self.answer_reports.values())
         status = f"{valid} hợp lệ • {missing} thiếu • {invalid} lỗi định dạng"
         page = SettingsScreen(self.settings, preview_path, status)
         page.back_requested.connect(self._cancel_settings)
-        page.theme_preview_requested.connect(self.theme_manager.apply)
+        page.theme_preview_requested.connect(self._apply_theme)
         page.saved.connect(self._save_settings)
         self._set_dynamic_page(page)
 
     def _cancel_settings(self) -> None:
-        self.theme_manager.apply(self.settings.theme)
+        self._apply_theme(self.settings.theme)
         self.show_home()
 
     def _save_settings(self, settings: AppSettings) -> None:
@@ -425,13 +456,7 @@ class MainWindow(QMainWindow):
         self.show_home()
 
     def show_history(self) -> None:
-        history = []
-        for attempt_row in self.database.exam_history():
-            attempt = dict(attempt_row)
-            answers = [
-                dict(answer) for answer in self.database.exam_detail(int(attempt["id"]))
-            ]
-            history.append((attempt, answers))
+        history = [dict(attempt) for attempt in self.database.exam_history()]
         page = HistoryScreen(history)
         page.back_requested.connect(self.show_home)
         page.delete_requested.connect(self._delete_exam_attempts)
@@ -457,5 +482,19 @@ class MainWindow(QMainWindow):
         if not self._resolve_active_exam_exit():
             event.ignore()
             return
-        self.database.set_setting("window_geometry", bytes(self.saveGeometry().toHex()).decode())
-        event.accept()
+        if hasattr(self, "watcher"):
+            try:
+                dirs = self.watcher.directories()
+                if dirs:
+                    self.watcher.removePaths(dirs)
+                files = self.watcher.files()
+                if files:
+                    self.watcher.removePaths(files)
+            except RuntimeError as exc:
+                LOGGER.debug("File watcher was already disposed during shutdown: %s", exc)
+        if hasattr(self, "thread_pool"):
+            self.thread_pool.clear()
+            self.thread_pool.waitForDone(1500)
+        geometry = self.saveGeometry().toHex().data().decode("ascii")
+        self.database.set_setting("window_geometry", geometry)
+        super().closeEvent(event)

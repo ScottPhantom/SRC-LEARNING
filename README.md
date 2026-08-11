@@ -8,7 +8,7 @@
 
 Giao diện và thông báo của ứng dụng sử dụng tiếng Việt. Tiến trình học và kết quả thi được lưu cục bộ trong `study_progress.sqlite3`.
 
-Header toàn cục luôn hiển thị nút `📖` và tên `SRC LEARNING`. Nhấn `📖` từ bất kỳ màn hình nào sẽ trở về màn hình chọn môn học; nếu Mock Exam còn đang làm, ứng dụng yêu cầu chọn hủy thao tác, nộp rồi thoát, hoặc thoát không lưu.
+Header toàn cục luôn hiển thị nút thương hiệu `SRC Learning`; nhấn nút này từ bất kỳ màn hình nào sẽ trở về màn hình chọn môn học. Trên Home, cụm Lịch sử/Làm mới/Cài đặt có animation hover 200 ms: phóng nhẹ khoảng 1,05×, đổi nền và tăng bóng xanh. Nếu Mock Exam còn đang làm, ứng dụng yêu cầu chọn hủy thao tác, nộp rồi thoát, hoặc thoát không lưu.
 
 ## Yêu cầu hệ thống
 
@@ -148,15 +148,16 @@ python main.py
 6. Phím `→` bỏ qua câu hiện tại và đánh dấu Chưa thuộc; phím `←` mở lịch sử chỉ xem; `ESC` quay lại.
 7. Nút “Học lại” kết thúc tiến trình hiện tại, xáo trộn và đưa phiên mới về câu 1. Sau khi hoàn thành câu cuối, ứng dụng tự gọi hành động này sau hộp thoại chúc mừng.
 
-### Chi tiết môn học và góc yếu điểm
+### Chi tiết môn học, thống kê và ôn tập nhanh
 
 - Ba chế độ học dùng card vuông 264×264 px có thể click toàn bộ. Khi hover, card tăng mượt lên 317×317 px trong 240 ms, bóng đổ đậm hơn và hai card còn lại được làm mờ để tập trung thị giác.
 - Vùng card được cố định theo kích thước hover tối đa nên animation không đẩy lệch tiêu đề hoặc dashboard. Chuyển từ menu môn học sang màn hình học dùng fade-out/fade-in tổng 300 ms.
-- Tab thống kê có chiều rộng tối thiểu 130 px và padding ngang 16 px để nhãn tiếng Việt không bị cắt.
-- Dashboard “Thống kê lỗi sai & Ôn tập nhanh” chia bốn tab theo loại câu và hiển thị tối đa 20 câu có tỷ lệ sai cao nhất.
-- Mỗi dòng cho biết tên ảnh, số lần sai/tổng lượt làm và tỷ lệ sai. Double-click hoặc chọn dòng rồi nhấn `Space` để mở cửa sổ ôn tập nhanh với ảnh đã crop và đáp án đúng.
+- Dashboard “Thống kê môn {tên môn} & Ôn tập nhanh” có hai tab lớn “Câu chưa học” và “Lỗi sai”; bên trong mỗi tab tiếp tục chia theo bốn loại câu.
+- “Câu chưa học” chỉ lấy các Flashcard ở trạng thái “Chưa thuộc”, hiển thị toàn bộ theo thứ tự file. Cột trạng thái dùng chữ đỏ để dễ nhận biết.
+- “Lỗi sai” giữ tối đa 20 câu có tỷ lệ sai cao nhất trong từng loại; mỗi dòng hiển thị tên ảnh, số lần sai/tổng lượt làm và tỷ lệ sai.
+- Double-click hoặc chọn dòng rồi nhấn `Space` để mở cửa sổ ôn tập nhanh với ảnh đã crop và đáp án đúng. Quick Review của câu chưa thuộc có thêm nút “Đã thuộc”/“Chưa thuộc” và lưu tiến độ Flashcard ngay lập tức.
 - Trong Quick Review, dùng `←`/`→` để duyệt các câu của tab hiện tại; ở biên danh sách phím tương ứng không làm gì. `Space` hoặc `Enter` đóng cửa sổ và trở về dashboard.
-- Dữ liệu dashboard được chuẩn bị bởi `AdaptiveReviewService`; View không đọc SQLite trực tiếp.
+- Dữ liệu dashboard được chuẩn bị bởi `AdaptiveReviewService`; View không đọc SQLite trực tiếp và không dùng chung với thống kê dành cho developer trong Tools.
 
 ### Phím tắt Image Viewer
 
@@ -190,7 +191,7 @@ python main.py
 8. Khi tạo đề, các câu từng sai nhiều được lấy mẫu ngẫu nhiên với trọng số cao hơn; câu đã trả lời đúng nhiều lần được giảm trọng số. Thuật toán vẫn bảo đảm không trùng câu trong cùng một đề.
 9. Màn hình kết quả có menu `↻ RE-Test`: tạo ngay đề mới bằng đúng cấu hình vừa dùng hoặc quay về màn hình cấu hình để chọn option khác.
 10. Kết quả chi tiết hiển thị bằng bảng 3 cột `NO / Correct answer / Điểm`; chọn một hàng để mở ảnh review. Hàng Total hiển thị tổng điểm và `PASS` từ 7.0 điểm trở lên, ngược lại là `FAIL`.
-11. Lịch sử bài thi cho phép chọn nhiều bài bằng `Ctrl/Cmd` hoặc `Shift`, sau đó dùng `🗑️ Xóa bài thi`. Việc xóa luôn yêu cầu xác nhận và xóa cascade toàn bộ chi tiết câu trả lời liên quan.
+11. Lịch sử bài thi được gom theo cây hai cấp `📁 Môn học → Bài thi #ID`; thời gian được đổi sang múi giờ máy và hiển thị `dd/MM/yyyy HH:mm`. Chỉ node bài thi có thể được chọn bằng `Ctrl/Cmd` hoặc `Shift` để dùng `🗑️ Xóa bài thi`; node môn học không thể xóa. Việc xóa luôn yêu cầu xác nhận và xóa cascade toàn bộ chi tiết câu trả lời liên quan.
 
 ### Phím tắt khi học/làm bài
 

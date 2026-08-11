@@ -7,7 +7,7 @@ a = Analysis(
     [str(project / "main.py")],
     pathex=[str(project)],
     binaries=[],
-    datas=[],
+    datas=[(str(project / "app" / "ui" / "assets"), "app/ui/assets")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
