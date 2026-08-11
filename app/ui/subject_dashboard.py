@@ -17,14 +17,17 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QShortcut,
     QVBoxLayout,
 )
 
-from app.domain.models import WeakQuestionReview
+from app.domain.models import LearningQuestionReview, WeakQuestionReview
 from app.ui.image_viewer import QuestionImageViewer
+
+ReviewEntry = LearningQuestionReview | WeakQuestionReview
 
 
 class StudyModeCard(QFrame):
@@ -171,11 +174,14 @@ class StudyModeCard(QFrame):
 
 
 class QuickReviewDialog(QDialog):
+    rating_requested = pyqtSignal(str, bool)
+
     def __init__(
         self,
-        reviews: list[WeakQuestionReview],
+        reviews: list[ReviewEntry],
         current_index: int,
         crop_region: tuple[float, float, float, float],
+        allow_rating: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -203,9 +209,25 @@ class QuickReviewDialog(QDialog):
         self.answer_label.setObjectName("quickReviewAnswer")
         self.answer_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.answer_label)
+        actions = QHBoxLayout()
+        self.known_button: QPushButton | None = None
+        self.learning_button: QPushButton | None = None
+        if allow_rating:
+            self.known_button = QPushButton("Đã thuộc")
+            self.known_button.setObjectName("quickReviewKnownButton")
+            self.known_button.clicked.connect(lambda: self._rate_current(True))
+            actions.addWidget(self.known_button)
+            self.learning_button = QPushButton("Chưa thuộc")
+            self.learning_button.setObjectName("quickReviewLearningButton")
+            self.learning_button.setProperty("danger", True)
+            self.learning_button.clicked.connect(lambda: self._rate_current(False))
+            actions.addWidget(self.learning_button)
+        actions.addStretch()
         self.close_button = QPushButton("Đóng")
+        self.close_button.setProperty("secondary", True)
         self.close_button.clicked.connect(self.close)
-        layout.addWidget(self.close_button, alignment=Qt.AlignRight)
+        actions.addWidget(self.close_button)
+        layout.addLayout(actions)
 
         self._navigation_shortcuts: list[QShortcut] = []
         for key, callback in (
@@ -219,6 +241,23 @@ class QuickReviewDialog(QDialog):
             shortcut.setContext(Qt.WindowShortcut)
             shortcut.activated.connect(callback)
             self._navigation_shortcuts.append(shortcut)
+        self._render_current()
+
+    def _rate_current(self, known: bool) -> None:
+        question_id = self.review.question.id
+        self.rating_requested.emit(question_id, known)
+        if known:
+            del self.reviews[self.current_index]
+            if not self.reviews:
+                self.close()
+                return
+            self.current_index = min(self.current_index, len(self.reviews) - 1)
+            self._render_current()
+            return
+        if self.current_index >= len(self.reviews) - 1:
+            self.close()
+            return
+        self.current_index += 1
         self._render_current()
 
     def _render_current(self) -> None:
