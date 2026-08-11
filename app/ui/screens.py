@@ -64,6 +64,7 @@ from app.domain.models import (
     AppSettings,
     ExamConfig,
     FeedbackMode,
+    LearningQuestionReview,
     Question,
     Subject,
     WeakQuestionReview,
@@ -592,6 +593,7 @@ class HomeScreen(QWidget):
 
 class ModeScreen(BasePage):
     mode_selected = pyqtSignal(str)
+    learning_status_changed = pyqtSignal(str, bool)
 
     def __init__(
         self,
@@ -600,11 +602,13 @@ class ModeScreen(BasePage):
         card_stats: dict[str, int],
         weak_questions: Mapping[str, list[WeakQuestionReview]],
         crop_region: tuple[float, float, float, float],
+        learning_questions: Mapping[str, list[LearningQuestionReview]] | None = None,
     ):
         super().__init__()
         self.subject = subject
         self.report = report
         self.crop_region = crop_region
+        self.card_stats = dict(card_stats)
         self.quick_review_dialog: QuickReviewDialog | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 20, 32, 24)
@@ -624,12 +628,10 @@ class ModeScreen(BasePage):
         heading.addWidget(subtitle)
         top.addLayout(heading, 1)
         layout.addLayout(top)
-        progress = QLabel(
-            f"Flashcard: {card_stats['known']} đã thuộc • "
-            f"{card_stats['learning']} chưa thuộc • {card_stats['new']} thẻ mới"
-        )
-        progress.setObjectName("subjectProgressSummary")
-        layout.addWidget(progress)
+        self.progress_summary = QLabel()
+        self.progress_summary.setObjectName("subjectProgressSummary")
+        self._update_progress_summary()
+        layout.addWidget(self.progress_summary)
 
         # Giữ một vùng có chiều cao bằng kích thước hover tối đa để animation
         # không làm QVBoxLayout đẩy header/dashboard ra khỏi cửa sổ.
@@ -675,18 +677,31 @@ class ModeScreen(BasePage):
         )
         layout.addWidget(cards_container)
 
-        dashboard_heading = QLabel("Thống kê lỗi sai & Ôn tập nhanh")
-        dashboard_heading.setObjectName("dashboardHeading")
-        layout.addWidget(dashboard_heading)
+        self.dashboard_heading = QLabel(
+            f"Thống kê môn {subject.name} & Ôn tập nhanh"
+        )
+        self.dashboard_heading.setObjectName("dashboardHeading")
+        layout.addWidget(self.dashboard_heading)
         dashboard_note = QLabel(
             "Double-click hoặc nhấn Space để xem nhanh ảnh và đáp án đúng. "
-            "Danh sách ưu tiên tỷ lệ sai cao nhất."
+            "Câu chưa thuộc theo thứ tự file; lỗi sai ưu tiên tỷ lệ cao nhất."
         )
         dashboard_note.setObjectName("subtitle")
         layout.addWidget(dashboard_note)
+
+        self.statistics_tabs = QTabWidget()
+        self.statistics_tabs.setObjectName("statisticsDashboard")
+        self.statistics_tabs.tabBar().setObjectName("statisticsTypeTabs")
+
+        self.learning_tabs = QTabWidget()
+        self.learning_tabs.setObjectName("learningDashboard")
         self.dashboard_tabs = QTabWidget()
         self.dashboard_tabs.setObjectName("weaknessDashboard")
+        self.learning_tables: dict[str, QTableWidget] = {}
         self.weak_tables: dict[str, QTableWidget] = {}
+        self._learning_entries_by_table: dict[
+            QTableWidget, list[LearningQuestionReview]
+        ] = {}
         self._weak_entries_by_table: dict[
             QTableWidget, list[WeakQuestionReview]
         ] = {}
@@ -697,11 +712,28 @@ class ModeScreen(BasePage):
             "Selections_Multiple_choose": "Chọn nhiều",
             "True_False": "Đúng/Sai",
         }
+        learning_questions = learning_questions or {}
         for category in CATEGORIES:
-            table = self._build_weakness_table(weak_questions.get(category, []))
-            self.weak_tables[category] = table
-            self.dashboard_tabs.addTab(table, tab_labels[category])
-        layout.addWidget(self.dashboard_tabs, 1)
+            learning_table = self._build_learning_table(
+                learning_questions.get(category, [])
+            )
+            self.learning_tables[category] = learning_table
+            self.learning_tabs.addTab(learning_table, tab_labels[category])
+            error_table = self._build_weakness_table(
+                weak_questions.get(category, [])
+            )
+            self.weak_tables[category] = error_table
+            self.dashboard_tabs.addTab(error_table, tab_labels[category])
+        self.statistics_tabs.addTab(self.learning_tabs, "Câu chưa học")
+        self.statistics_tabs.addTab(self.dashboard_tabs, "Lỗi sai")
+        layout.addWidget(self.statistics_tabs, 1)
+
+    def _update_progress_summary(self) -> None:
+        self.progress_summary.setText(
+            f"Flashcard: {self.card_stats.get('known', 0)} đã thuộc • "
+            f"{self.card_stats.get('learning', 0)} chưa thuộc • "
+            f"{self.card_stats.get('new', 0)} thẻ mới"
+        )
 
     def _focus_mode_card(self, active_mode: str, focused: bool) -> None:
         for mode, card in self.mode_cards.items():
@@ -761,13 +793,72 @@ class ModeScreen(BasePage):
         self._quick_review_shortcuts.append(open_shortcut)
         return table
 
+    def _build_learning_table(
+        self, entries: list[LearningQuestionReview]
+    ) -> QTableWidget:
+        ordered_entries = list(entries)
+        table = QTableWidget(max(1, len(ordered_entries)), 2)
+        self._learning_entries_by_table[table] = ordered_entries
+        table.setObjectName("learningQuestionTable")
+        table.setHorizontalHeaderLabels(["Câu hỏi", "Trạng thái"])
+        table.verticalHeader().hide()
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setAlternatingRowColors(True)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeToContents
+        )
+        self._render_learning_table(table)
+        table.cellDoubleClicked.connect(
+            lambda row, _column, source=table: self._open_quick_review(source, row)
+        )
+        open_shortcut = QShortcut(QKeySequence(Qt.Key_Space), table)
+        open_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        open_shortcut.activated.connect(
+            lambda source=table: self._open_selected_quick_review(source)
+        )
+        self._quick_review_shortcuts.append(open_shortcut)
+        return table
+
+    def _render_learning_table(self, table: QTableWidget) -> None:
+        entries = self._learning_entries_by_table[table]
+        table.clearContents()
+        table.clearSpans()
+        table.setRowCount(max(1, len(entries)))
+        if not entries:
+            empty = QTableWidgetItem(
+                "Không có câu nào ở trạng thái Chưa thuộc trong nhóm này."
+            )
+            empty.setFlags(Qt.ItemIsEnabled)
+            empty.setForeground(QColor("#8E8E93"))
+            table.setItem(0, 0, empty)
+            table.setSpan(0, 0, 1, 2)
+            return
+        for row, review in enumerate(entries):
+            name = Path(review.question.relative_path).name
+            name_cell = QTableWidgetItem(name)
+            name_cell.setData(Qt.UserRole, review)
+            name_cell.setToolTip(review.question.relative_path)
+            status_cell = QTableWidgetItem("Chưa thuộc")
+            status_cell.setForeground(QColor("#FF453A"))
+            status_cell.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 0, name_cell)
+            table.setItem(row, 1, status_cell)
+
     def _open_selected_quick_review(self, table: QTableWidget) -> None:
         row = table.currentRow()
         if row >= 0:
             self._open_quick_review(table, row)
 
     def _open_quick_review(self, table: QTableWidget, row: int) -> None:
-        entries = self._weak_entries_by_table.get(table, [])
+        is_learning_review = table in self._learning_entries_by_table
+        entries = (
+            self._learning_entries_by_table.get(table, [])
+            if is_learning_review
+            else self._weak_entries_by_table.get(table, [])
+        )
         if not 0 <= row < len(entries):
             return
         if self.quick_review_dialog is not None:
@@ -777,11 +868,35 @@ class ModeScreen(BasePage):
             entries,
             row,
             self.crop_region,
-            self,
+            allow_rating=is_learning_review,
+            parent=self,
         )
+        if is_learning_review:
+            self.quick_review_dialog.rating_requested.connect(
+                self._handle_learning_rating
+            )
         self.quick_review_dialog.show()
         self.quick_review_dialog.raise_()
         self.quick_review_dialog.activateWindow()
+
+    def _handle_learning_rating(self, question_id: str, known: bool) -> None:
+        self.learning_status_changed.emit(question_id, known)
+        if not known:
+            return
+        for table, entries in self._learning_entries_by_table.items():
+            remaining = [
+                entry for entry in entries if entry.question.id != question_id
+            ]
+            if len(remaining) == len(entries):
+                continue
+            entries[:] = remaining
+            self._render_learning_table(table)
+            self.card_stats["learning"] = max(
+                0, self.card_stats.get("learning", 0) - 1
+            )
+            self.card_stats["known"] = self.card_stats.get("known", 0) + 1
+            self._update_progress_summary()
+            break
 
 
 @dataclass(slots=True)

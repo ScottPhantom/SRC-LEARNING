@@ -299,19 +299,22 @@ class MainWindow(QMainWindow):
             return
         self.current_subject = subject
         report = self.answer_reports[subject.name]
+        review_service = AdaptiveReviewService(
+            self.database,
+            subject.questions,
+            report.answers,
+        )
         page = ModeScreen(
             subject,
             report,
             self.database.card_stats(subject.name),
-            AdaptiveReviewService(
-                self.database,
-                subject.questions,
-                report.answers,
-            ).top_errors_by_category(),
+            review_service.top_errors_by_category(),
             self.settings.crop_region,
+            learning_questions=review_service.learning_by_category(),
         )
         page.back_requested.connect(self.show_home)
         page.mode_selected.connect(self._open_mode)
+        page.learning_status_changed.connect(self.database.rate_card)
         self._set_dynamic_page(page)
 
     def _open_mode(self, mode: str) -> None:

@@ -494,6 +494,34 @@ def test_adaptive_review_service_ranks_errors_and_excludes_mastered(
     database.close()
 
 
+def test_adaptive_review_service_lists_all_learning_questions_in_file_order(
+    tmp_path: Path,
+) -> None:
+    subject = make_questions(tmp_path / "DATA", 12)
+    database = Database(tmp_path / "learning-review.sqlite3")
+    database.sync_questions(subject.questions, [subject.name])
+    for question in subject.questions:
+        database.rate_card(question.id, known=False)
+    database.rate_card(subject.questions[3].id, known=True)
+    answers = {question.relative_path: "A" for question in subject.questions}
+
+    grouped = AdaptiveReviewService(
+        database,
+        subject.questions,
+        answers,
+    ).learning_by_category()
+
+    entries = grouped["Selections_1_choose"]
+    assert [entry.question.id for entry in entries] == [
+        question.id
+        for question in subject.questions
+        if question.id != subject.questions[3].id
+    ]
+    assert len(entries) == 11
+    assert all(entry.correct_answer == "A" for entry in entries)
+    database.close()
+
+
 def test_exam_rejects_count_over_valid_pool(tmp_path: Path) -> None:
     subject = make_questions(tmp_path / "DATA", 2)
     database = Database(tmp_path / "progress.sqlite3")
