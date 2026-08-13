@@ -6,14 +6,20 @@ import argparse
 import sys
 from pathlib import Path
 
+import cv2
+import pytesseract
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.config import DEFAULT_DB_PATH, DEFAULT_MASK_REGION
+from app.config import DEFAULT_DB_PATH, DEFAULT_MASK_REGION, MULTIPLE_CATEGORY
+from app.repositories.answer_key import AnswerKeyRepository
 from app.repositories.database import Database
+from app.services.answer_ocr import crop_answer, read_image_unicode, recognize
 from app.services.data_scanner import DataScannerService
 from app.services.question_bank_updates import QuestionBankUpdateChecker
+from tools.build_answers import prompt_for_manual_answer
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,7 +32,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Tạo bank version mới, cập nhật answers.csv và chấm lại lịch sử",
     )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Không hỏi đáp án thủ công khi OCR thất bại",
+    )
     return parser
+
+
+def interactive_answer_resolver(question) -> str:
+    """Try OCR first, then require a valid developer answer in an interactive CLI."""
+
+    answer = ""
+    try:
+        image = read_image_unicode(question.absolute_path)
+        crop = crop_answer(image, DEFAULT_MASK_REGION)
+        answer = recognize(crop, question.category == MULTIPLE_CATEGORY)
+    except (
+        OSError,
+        ValueError,
+        RuntimeError,
+        cv2.error,
+        pytesseract.TesseractError,
+    ) as exc:
+        print(
+            f"WARNING: OCR thất bại cho {question.relative_path}: {exc}",
+            file=sys.stderr,
+        )
+    if AnswerKeyRepository.validate(question, answer):
+        return answer
+    return prompt_for_manual_answer(question)
 
 
 def main() -> int:
@@ -43,7 +78,14 @@ def main() -> int:
             [question for subject in subjects for question in subject.questions],
             [subject.name for subject in subjects],
         )
-        checker = QuestionBankUpdateChecker(database, DEFAULT_MASK_REGION)
+        resolver = (
+            interactive_answer_resolver
+            if args.apply and not args.non_interactive and sys.stdin.isatty()
+            else None
+        )
+        checker = QuestionBankUpdateChecker(
+            database, DEFAULT_MASK_REGION, answer_resolver=resolver
+        )
         results = checker.check(subjects, apply=args.apply)
     finally:
         database.close()

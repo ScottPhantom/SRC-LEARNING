@@ -48,6 +48,7 @@ from app.ui.screens import (
     ResultScreen,
     SettingsScreen,
 )
+from app.ui.subject_dashboard import QuestionBankNotificationDialog
 from app.ui.themes import ThemeManager
 
 LOGGER = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self._scan_running = False
         self._rescan_requested = False
-        self._bank_update_dialogs: list[QMessageBox] = []
+        self._bank_update_dialog: QuestionBankNotificationDialog | None = None
         self.theme_manager = ThemeManager(QApplication.instance())
         self._apply_theme(self.settings.theme)
         self.refresh_data()
@@ -278,40 +279,18 @@ class MainWindow(QMainWindow):
             for subject in subjects
         }
         self.home.set_subjects(subjects, self.data_dir)
-        self._notify_bank_updates(bank_results)
+        self._report_bank_update_errors(bank_results)
         self._reset_watch_paths(subjects)
 
-    def _notify_bank_updates(self, results: list[BankUpdateResult]) -> None:
-        messages = [
-            f"{result.subject}\n{result.notification}"
-            for result in results
-            if result.applied and result.notification
-        ]
+    def _report_bank_update_errors(self, results: list[BankUpdateResult]) -> None:
         errors = [
             f"{result.subject}: " + "; ".join(result.errors)
             for result in results
-            if result.errors
+            if getattr(result, "errors", None)
         ]
         if errors:
             LOGGER.warning("Question bank update chưa hoàn tất: %s", " | ".join(errors))
             self.home.notice.setText("Lỗi cập nhật đáp án: " + " | ".join(errors))
-        if not messages:
-            return
-        dialog = QMessageBox(self)
-        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
-        dialog.setWindowTitle("Bộ câu hỏi đã được cập nhật")
-        dialog.setIcon(QMessageBox.Information)
-        dialog.setText("\n\n".join(messages))
-        dialog.setStandardButtons(QMessageBox.Ok)
-        dialog.finished.connect(
-            lambda _result, current=dialog: (
-                self._bank_update_dialogs.remove(current)
-                if current in self._bank_update_dialogs
-                else None
-            )
-        )
-        self._bank_update_dialogs.append(dialog)
-        dialog.show()
 
     def _reset_watch_paths(self, subjects: list[Subject]) -> None:
         old_paths = self.watcher.directories() + self.watcher.files()
@@ -363,6 +342,88 @@ class MainWindow(QMainWindow):
         page.mode_selected.connect(self._open_mode)
         page.learning_status_changed.connect(self.database.rate_card)
         self._set_dynamic_page(page)
+        QTimer.singleShot(
+            0,
+            lambda selected=subject.name, current_page=page: (
+                self._show_pending_bank_notification(selected, current_page)
+            ),
+        )
+
+    def _show_pending_bank_notification(
+        self, subject_name: str, subject_page: ModeScreen
+    ) -> None:
+        if (
+            self.current_subject is None
+            or self.current_subject.name != subject_name
+            or self.stack.currentWidget() is not subject_page
+            or self._bank_update_dialog is not None
+        ):
+            return
+        pending = self.database.pending_question_bank_notification(subject_name)
+        if pending is None:
+            return
+        bank_version, items = pending
+        subject = self.subjects.get(subject_name)
+        if subject is None:
+            return
+        dialog = QuestionBankNotificationDialog(
+            subject_name,
+            subject.path,
+            bank_version,
+            items,
+            self.settings.crop_region,
+            parent=self,
+        )
+        dialog.item_viewed.connect(
+            lambda item_index, selected=subject_name, version=bank_version: (
+                self.database.mark_question_bank_notification_item_viewed(
+                    selected, version, item_index
+                )
+            )
+        )
+        dialog.completion_requested.connect(
+            lambda selected=subject_name, version=bank_version, current=dialog: (
+                self._complete_bank_notification(selected, version, current)
+            )
+        )
+
+        def clear_dialog(_result: int) -> None:
+            if self._bank_update_dialog is dialog:
+                self._bank_update_dialog = None
+            dialog.deleteLater()
+            QTimer.singleShot(
+                0,
+                lambda selected=subject_name, current_page=subject_page: (
+                    self._show_pending_bank_notification(selected, current_page)
+                ),
+            )
+
+        dialog.finished.connect(clear_dialog)
+        self._bank_update_dialog = dialog
+        dialog.open()
+
+    def _complete_bank_notification(
+        self,
+        subject: str,
+        bank_version: int,
+        dialog: QuestionBankNotificationDialog,
+    ) -> None:
+        try:
+            completed = self.database.complete_question_bank_notification(
+                subject, bank_version
+            )
+        except Exception as exc:  # Keep the mandatory modal open on persistence errors.
+            LOGGER.exception(
+                "Không thể hoàn tất Question Bank Notification %s v%d",
+                subject,
+                bank_version,
+            )
+            dialog.show_completion_error(f"Không thể lưu trạng thái đã xem: {exc}")
+            return
+        if completed:
+            dialog.complete_and_close()
+        else:
+            dialog.show_completion_error("Hãy xem tất cả thay đổi trước khi hoàn tất.")
 
     def _open_mode(self, mode: str) -> None:
         if self.current_subject is None or self._transition_in_progress:

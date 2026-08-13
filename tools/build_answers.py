@@ -6,6 +6,7 @@ import argparse
 import csv
 import sys
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -83,14 +84,88 @@ def answer_output_path(subject_path: Path) -> Path:
     return subject_path / AnswerKeyRepository.FILE_NAME
 
 
+def normalized_rows(rows: list[tuple[str, str]]) -> dict[str, str]:
+    return {
+        normalize_relative_path(relative): normalize_answer(answer)
+        for relative, answer in rows
+        if normalize_relative_path(relative)
+    }
+
+
+def publish_answers(
+    subject_path: Path,
+    active_answers: dict[str, str],
+    rows: list[tuple[str, str]],
+) -> tuple[Path, str]:
+    """Write OCR output only when it differs from the active versioned bank."""
+
+    output_path = answer_output_path(subject_path)
+    candidate_answers = normalized_rows(rows)
+    normalized_active = {
+        normalize_relative_path(relative): normalize_answer(answer)
+        for relative, answer in active_answers.items()
+    }
+    if (
+        output_path.name == PENDING_ANSWERS_FILE
+        and candidate_answers == normalized_active
+    ):
+        output_path.unlink(missing_ok=True)
+        return output_path, "unchanged"
+    write_csv(output_path, rows)
+    return output_path, "written"
+
+
+def answer_rule(question) -> str:
+    if question.category == MULTIPLE_CATEGORY:
+        return "nhập 2–4 ký tự khác nhau trong A–D, ví dụ AD"
+    if question.category == "True_False":
+        return "nhập A hoặc B"
+    return "nhập một ký tự A, B, C hoặc D"
+
+
+def prompt_for_manual_answer(
+    question,
+    *,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
+) -> str:
+    """Ask a developer for one answer until it is valid or explicitly skipped."""
+
+    repository = AnswerKeyRepository()
+    output_func("")
+    output_func("MANUAL ANSWER REQUIRED")
+    output_func(f"  Môn học : {question.subject}")
+    output_func(f"  Câu hỏi : {question.relative_path}")
+    output_func(f"  Loại câu: {question.category}")
+    output_func(f"  Ảnh     : {question.absolute_path}")
+    output_func(f"  Quy tắc : {answer_rule(question)}")
+    output_func("  Gõ 'skip' để bỏ qua; bank version mới sẽ không được kích hoạt.")
+    while True:
+        try:
+            raw = input_func("Nhập đáp án đúng: ").strip()
+        except EOFError:
+            output_func(
+                "Không thể đọc stdin; câu hỏi được để lại để kiểm tra thủ công."
+            )
+            return ""
+        if raw.casefold() == "skip":
+            output_func("Đã bỏ qua câu hỏi này.")
+            return ""
+        answer = normalize_answer(raw)
+        if repository.validate(question, answer):
+            output_func(f"Đã nhận đáp án thủ công: {answer}")
+            return answer
+        output_func(f"Đáp án {raw!r} không hợp lệ; {answer_rule(question)}.")
+
+
 def process_subject(subject, args: argparse.Namespace) -> tuple[int, int]:
     repository = AnswerKeyRepository()
     csv_path = subject.path / repository.FILE_NAME
-    existing = read_existing(csv_path)
+    active_answers = read_existing(csv_path)
+    existing = dict(active_answers)
     pending_path = subject.path / PENDING_ANSWERS_FILE
     if pending_path.exists():
         existing.update(read_existing(pending_path))
-    output_path = answer_output_path(subject.path)
     output: list[tuple[str, str]] = []
     summary: Counter[str] = Counter()
     failed_dir = (
@@ -120,8 +195,17 @@ def process_subject(subject, args: argparse.Namespace) -> tuple[int, int]:
             pytesseract.TesseractError,
         ) as exc:
             print(f"WARNING: {subject.name}/{relative}: {exc}", file=sys.stderr)
+        if (
+            not answer
+            and not getattr(args, "non_interactive", False)
+            and sys.stdin.isatty()
+        ):
+            answer = prompt_for_manual_answer(question)
         if answer:
-            summary["recognized"] += 1
+            if repository.validate(question, answer):
+                summary["resolved"] += 1
+            else:  # pragma: no cover - defensive guard around the prompt contract
+                answer = ""
         else:
             summary["failed"] += 1
             print(
@@ -135,13 +219,19 @@ def process_subject(subject, args: argparse.Namespace) -> tuple[int, int]:
                     str(destination / question.absolute_path.name)
                 )
         output.append((relative, answer))
-    write_csv(output_path, output)
+    output_path, publish_status = publish_answers(subject.path, active_answers, output)
+    if publish_status == "unchanged":
+        destination_message = (
+            f"không có thay đổi so với {csv_path}; không tạo {output_path.name}"
+        )
+    else:
+        destination_message = str(output_path)
     print(
-        f"{subject.name}: {summary['recognized']} OCR thành công, "
+        f"{subject.name}: {summary['resolved']} OCR/thủ công thành công, "
         f"{summary['preserved']} giữ nguyên, {summary['failed']} cần điền thủ công "
-        f"-> {output_path}"
+        f"-> {destination_message}"
     )
-    return summary["recognized"] + summary["preserved"], summary["failed"]
+    return summary["resolved"] + summary["preserved"], summary["failed"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -160,6 +250,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--failed-crops",
         help="Thư mục tùy chọn để lưu vùng crop của các ảnh OCR thất bại",
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Không hỏi đáp án thủ công; giữ ô trống khi OCR thất bại",
     )
     return parser
 

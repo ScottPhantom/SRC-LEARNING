@@ -141,6 +141,42 @@ QTableWidget#weakQuestionTable QHeaderView::section {
   background: #eef2f7; color: #334155; border: 0;
   border-bottom: 1px solid #cbd5e1; padding: 7px; font-weight: 800;
 }
+QDialog#questionBankNotificationDialog { background: #edf2f8; color: #172033; }
+QFrame#bankNotificationCard {
+  background: #ffffff; border: 1px solid #dce2ec; border-radius: 18px;
+}
+QLabel#bankNotificationPosition { color: #475569; font-size: 13px; font-weight: 800; }
+QLabel#bankNotificationVersion { color: #64748b; font-size: 11px; font-weight: 700; }
+QLabel#bankChangeBadge, QLabel#bankCategoryBadge {
+  border-radius: 8px; padding: 5px 10px; font-size: 11px; font-weight: 900;
+}
+QLabel#bankChangeBadge[changeType="ADD"] { background: #DCFCE7; color: #166534; }
+QLabel#bankChangeBadge[changeType="UPDATE"] { background: #FEF3C7; color: #92400E; }
+QLabel#bankChangeBadge[changeType="DELETE"] { background: #FEE2E2; color: #991B1B; }
+QLabel#bankCategoryBadge { background: #E8EEF7; color: #334155; }
+QLabel#bankNotificationTitle { color: #172033; font-size: 25px; font-weight: 850; }
+QLabel#bankNotificationDetail { color: #64748b; font-size: 14px; font-weight: 700; }
+QStackedWidget#bankNotificationContent {
+  background: #f5f7fb; border: 1px solid #dce2ec; border-radius: 12px;
+}
+QFrame#bankMissingImagePlaceholder {
+  background: #f5f7fb; border: 1px dashed #a8b4c5; border-radius: 12px;
+}
+QLabel#bankMissingImageTitle { color: #334155; font-size: 18px; font-weight: 800; }
+QLabel#bankMissingImageMetadata { color: #64748b; font-size: 13px; line-height: 1.4; }
+QFrame#bankAnswerCard {
+  background: #EEF5FF; border: 1px solid #BFDBFE; border-radius: 12px;
+}
+QLabel#bankAnswerCaption { color: #475569; font-size: 13px; font-weight: 800; }
+QLabel#bankAnswerValue { color: #0A84FF; font-size: 25px; font-weight: 900; }
+QLabel#bankNotificationError { color: #B42318; font-size: 12px; font-weight: 700; }
+QPushButton#bankPreviousButton, QPushButton#bankNextButton,
+QPushButton#bankFinishButton { min-width: 108px; border-radius: 9px; }
+QPushButton#bankPreviousButton:disabled, QPushButton#bankNextButton:disabled {
+  background: #E5E7EB; color: #9CA3AF; border: 1px solid #D1D5DB;
+}
+QPushButton#bankFinishButton { background: #16803A; }
+QPushButton#bankFinishButton:hover { background: #116B30; }
 QDialog#quickReviewDialog { background: #f5f7fb; color: #172033; }
 QLabel#quickReviewTitle { font-size: 17px; font-weight: 800; }
 QLabel#quickReviewCaption { color: #64748b; font-size: 12px; font-weight: 700; }
@@ -407,6 +443,42 @@ QTableWidget#weakQuestionTable QHeaderView::section {
   background: #273345; color: #cbd5e1; border: 0;
   border-bottom: 1px solid #4b5563; padding: 7px; font-weight: 800;
 }
+QDialog#questionBankNotificationDialog { background: #0F1117; color: #F5F5F7; }
+QFrame#bankNotificationCard {
+  background: #171A21; border: 1px solid #343844; border-radius: 18px;
+}
+QLabel#bankNotificationPosition { color: #CBD5E1; font-size: 13px; font-weight: 800; }
+QLabel#bankNotificationVersion { color: #94A3B8; font-size: 11px; font-weight: 700; }
+QLabel#bankChangeBadge, QLabel#bankCategoryBadge {
+  border-radius: 8px; padding: 5px 10px; font-size: 11px; font-weight: 900;
+}
+QLabel#bankChangeBadge[changeType="ADD"] { background: #143824; color: #70E19A; }
+QLabel#bankChangeBadge[changeType="UPDATE"] { background: #493514; color: #F8C45C; }
+QLabel#bankChangeBadge[changeType="DELETE"] { background: #482321; color: #FF8A82; }
+QLabel#bankCategoryBadge { background: #252B36; color: #CBD5E1; }
+QLabel#bankNotificationTitle { color: #F8FAFC; font-size: 25px; font-weight: 850; }
+QLabel#bankNotificationDetail { color: #A1A1A6; font-size: 14px; font-weight: 700; }
+QStackedWidget#bankNotificationContent {
+  background: #11141A; border: 1px solid #343844; border-radius: 12px;
+}
+QFrame#bankMissingImagePlaceholder {
+  background: #11141A; border: 1px dashed #515866; border-radius: 12px;
+}
+QLabel#bankMissingImageTitle { color: #E5E7EB; font-size: 18px; font-weight: 800; }
+QLabel#bankMissingImageMetadata { color: #A1A1A6; font-size: 13px; line-height: 1.4; }
+QFrame#bankAnswerCard {
+  background: #13263D; border: 1px solid #244E78; border-radius: 12px;
+}
+QLabel#bankAnswerCaption { color: #CBD5E1; font-size: 13px; font-weight: 800; }
+QLabel#bankAnswerValue { color: #60A5FA; font-size: 25px; font-weight: 900; }
+QLabel#bankNotificationError { color: #FF8A82; font-size: 12px; font-weight: 700; }
+QPushButton#bankPreviousButton, QPushButton#bankNextButton,
+QPushButton#bankFinishButton { min-width: 108px; border-radius: 9px; }
+QPushButton#bankPreviousButton:disabled, QPushButton#bankNextButton:disabled {
+  background: #242832; color: #686E7A; border: 1px solid #343844;
+}
+QPushButton#bankFinishButton { background: #1F7A3B; color: #ECFFF1; }
+QPushButton#bankFinishButton:hover { background: #278F48; }
 QDialog#quickReviewDialog { background: #171A21; color: #F5F5F7; }
 QLabel#quickReviewTitle { color: #f8fafc; font-size: 17px; font-weight: 800; }
 QLabel#quickReviewCaption { color: #94a3b8; font-size: 12px; font-weight: 700; }

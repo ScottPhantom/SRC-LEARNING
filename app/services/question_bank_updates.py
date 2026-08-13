@@ -178,6 +178,47 @@ class QuestionBankUpdateChecker:
         return recognize(crop, question.category == MULTIPLE_CATEGORY)
 
     @staticmethod
+    def _notification_change_rows(
+        changes: list[BankChange],
+    ) -> list[dict[str, str | None]]:
+        """Serialize UI notification data without changing detection semantics."""
+        rows: list[dict[str, str | None]] = []
+        for change in changes:
+            old = change.old
+            question = change.question
+            rows.append(
+                {
+                    "change_type": change.kind,
+                    "logical_id": (
+                        old.logical_id
+                        if old is not None
+                        else question.id
+                        if question is not None
+                        else ""
+                    ),
+                    "question_id": (
+                        question.id
+                        if question is not None
+                        else old.question_id
+                        if old is not None
+                        else None
+                    ),
+                    "old_path": old.relative_path if old is not None else None,
+                    "new_path": (
+                        normalize_relative_path(question.relative_path)
+                        if question is not None
+                        else None
+                    ),
+                    "old_category": old.category if old is not None else None,
+                    "new_category": question.category if question is not None else None,
+                    "old_answer": old.answer if old is not None else None,
+                    "new_answer": change.new_answer if question is not None else None,
+                    "reason": change.reason,
+                }
+            )
+        return rows
+
+    @staticmethod
     def _read_answers(path: Path) -> dict[str, str]:
         if not path.exists():
             return {}
@@ -690,6 +731,7 @@ class QuestionBankUpdateChecker:
                 question_count=len(subject.questions),
                 added_count=len(result.added),
                 deleted_count=len(result.deleted),
+                notification_changes=self._notification_change_rows(result.changes),
                 finalize=finalize_files,
             )
         except OSError as exc:

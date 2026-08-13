@@ -19,7 +19,7 @@ from app.domain.models import (
     normalize_answer,
 )
 from app.repositories.answer_key import AnswerKeyRepository
-from app.repositories.database import Database
+from app.repositories.database import CURRENT_SCHEMA_VERSION, Database
 from app.services.adaptive import AdaptiveReviewService
 from app.services.data_scanner import DataScannerService
 from app.services.exam import ExamResult, ExamService
@@ -642,7 +642,8 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
     connection.commit()
     connection.close()
     database = Database(path)
-    backups = list(tmp_path.glob("legacy.pre-v1.*.sqlite3"))
+    backup_directory = tmp_path / "backups" / "database"
+    backups = list(backup_directory.glob("legacy.pre-v1.*.sqlite3"))
     assert backups == [database.migration_backup_path]
     with sqlite3.connect(backups[0]) as backup:
         assert backup.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -659,7 +660,7 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
     assert attempt["score"] == 5.0
     assert [row["awarded_score"] for row in database.exam_detail(1)] == [5.0, 0.0]
     version = database._connection.execute("SELECT version FROM schema_version").fetchone()[0]
-    assert version == 5
+    assert version == CURRENT_SCHEMA_VERSION
     tables = {
         row["name"]
         for row in database._connection.execute(
@@ -667,6 +668,8 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
         )
     }
     assert "question_error_stats" in tables
+    assert "question_bank_notifications" in tables
+    assert "question_bank_notification_changes" in tables
     database.close()
 
 
@@ -679,7 +682,9 @@ def test_database_does_not_backup_new_or_current_schema(tmp_path: Path) -> None:
     reopened = Database(path)
     assert reopened.migration_backup_path is None
     reopened.close()
-    assert list(tmp_path.glob("current.pre-v*.*.sqlite3")) == []
+    assert list(
+        (tmp_path / "backups" / "database").glob("current.pre-v*.*.sqlite3")
+    ) == []
 
 
 def test_database_aborts_migration_when_backup_fails(

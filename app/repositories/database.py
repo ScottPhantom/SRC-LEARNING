@@ -13,7 +13,8 @@ from typing import Any
 from app.domain.models import AppSettings, Question, QuestionErrorStat, normalize_answer
 
 LOGGER = logging.getLogger(__name__)
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
+MIGRATION_BACKUP_DIRECTORY = Path("backups") / "database"
 
 
 def utc_now() -> str:
@@ -64,11 +65,13 @@ class Database:
     def _create_migration_backup(self, previous_version: int) -> Path:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         suffix = self.path.suffix or ".sqlite3"
-        backup_path = self.path.with_name(
+        backup_directory = self.path.parent / MIGRATION_BACKUP_DIRECTORY
+        backup_path = backup_directory / (
             f"{self.path.stem}.pre-v{previous_version}.{timestamp}{suffix}"
         )
         backup_connection: sqlite3.Connection | None = None
         try:
+            backup_directory.mkdir(parents=True, exist_ok=True)
             backup_connection = sqlite3.connect(str(backup_path))
             self._connection.backup(backup_connection)
             integrity = backup_connection.execute("PRAGMA integrity_check").fetchone()
@@ -252,6 +255,39 @@ class Database:
         );
         CREATE INDEX IF NOT EXISTS idx_question_revisions_active
             ON question_revisions(subject, active, question_id);
+
+        CREATE TABLE IF NOT EXISTS question_bank_notifications (
+            subject TEXT NOT NULL,
+            bank_version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            notification_seen_at TEXT,
+            PRIMARY KEY(subject, bank_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_question_bank_notifications_pending
+            ON question_bank_notifications(
+                subject, notification_seen_at, bank_version
+            );
+
+        CREATE TABLE IF NOT EXISTS question_bank_notification_changes (
+            subject TEXT NOT NULL,
+            bank_version INTEGER NOT NULL,
+            item_index INTEGER NOT NULL,
+            change_type TEXT NOT NULL CHECK(change_type IN ('ADD', 'UPDATE', 'DELETE')),
+            logical_id TEXT NOT NULL,
+            question_id TEXT,
+            old_path TEXT,
+            new_path TEXT,
+            old_category TEXT,
+            new_category TEXT,
+            old_answer TEXT,
+            new_answer TEXT,
+            reason TEXT NOT NULL DEFAULT '',
+            viewed_at TEXT,
+            PRIMARY KEY(subject, bank_version, item_index),
+            FOREIGN KEY(subject, bank_version)
+                REFERENCES question_bank_notifications(subject, bank_version)
+                ON DELETE CASCADE
+        );
         """
         with self.transaction() as connection:
             connection.executescript(schema)
@@ -356,6 +392,76 @@ class Database:
         ).fetchone()
         return int(row["bank_version"]) if row else 1
 
+    def pending_question_bank_notification(
+        self, subject: str
+    ) -> tuple[int, list[dict[str, Any]]] | None:
+        """Return the oldest unfinished notification for one subject."""
+        notification = self._connection.execute(
+            """SELECT bank_version FROM question_bank_notifications n
+            WHERE subject=? AND notification_seen_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM question_bank_notification_changes c
+                WHERE c.subject=n.subject AND c.bank_version=n.bank_version
+              )
+            ORDER BY bank_version LIMIT 1""",
+            (subject,),
+        ).fetchone()
+        if notification is None:
+            return None
+        bank_version = int(notification["bank_version"])
+        rows = self._connection.execute(
+            """SELECT item_index,change_type,logical_id,question_id,
+            old_path,new_path,old_category,new_category,old_answer,new_answer,
+            reason,viewed_at
+            FROM question_bank_notification_changes
+            WHERE subject=? AND bank_version=? ORDER BY item_index""",
+            (subject, bank_version),
+        ).fetchall()
+        return bank_version, [dict(row) for row in rows]
+
+    def mark_question_bank_notification_item_viewed(
+        self, subject: str, bank_version: int, item_index: int
+    ) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE question_bank_notification_changes
+                SET viewed_at=COALESCE(viewed_at, ?)
+                WHERE subject=? AND bank_version=? AND item_index=?""",
+                (utc_now(), subject, bank_version, item_index),
+            )
+
+    def complete_question_bank_notification(
+        self, subject: str, bank_version: int
+    ) -> bool:
+        """Complete only after every persisted change has been viewed."""
+        with self.transaction() as connection:
+            pending = connection.execute(
+                """SELECT COUNT(*) amount
+                FROM question_bank_notification_changes
+                WHERE subject=? AND bank_version=? AND viewed_at IS NULL""",
+                (subject, bank_version),
+            ).fetchone()
+            total = connection.execute(
+                """SELECT COUNT(*) amount
+                FROM question_bank_notification_changes
+                WHERE subject=? AND bank_version=?""",
+                (subject, bank_version),
+            ).fetchone()
+            if (
+                pending is None
+                or total is None
+                or int(total["amount"]) == 0
+                or int(pending["amount"]) > 0
+            ):
+                return False
+            cursor = connection.execute(
+                """UPDATE question_bank_notifications
+                SET notification_seen_at=COALESCE(notification_seen_at, ?)
+                WHERE subject=? AND bank_version=?""",
+                (utc_now(), subject, bank_version),
+            )
+            return cursor.rowcount == 1
+
     @staticmethod
     def _score_saved_answer(
         selected_answer: str,
@@ -387,6 +493,7 @@ class Database:
         question_count: int,
         added_count: int,
         deleted_count: int,
+        notification_changes: Sequence[dict[str, Any]] = (),
         finalize: Callable[[], None] | None = None,
     ) -> None:
         """Persist one bank version and regrade every affected Mock Exam atomically."""
@@ -422,6 +529,48 @@ class Database:
                     deleted_count,
                 ),
             )
+            if notification_changes:
+                connection.execute(
+                    """INSERT INTO question_bank_notifications(
+                    subject,bank_version,created_at,notification_seen_at
+                    ) VALUES(?,?,?,NULL)
+                    ON CONFLICT(subject,bank_version) DO NOTHING""",
+                    (subject, bank_version, now),
+                )
+                for item_index, change in enumerate(notification_changes):
+                    connection.execute(
+                        """INSERT INTO question_bank_notification_changes(
+                        subject,bank_version,item_index,change_type,logical_id,
+                        question_id,old_path,new_path,old_category,new_category,
+                        old_answer,new_answer,reason,viewed_at
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+                        ON CONFLICT(subject,bank_version,item_index) DO UPDATE SET
+                            change_type=excluded.change_type,
+                            logical_id=excluded.logical_id,
+                            question_id=excluded.question_id,
+                            old_path=excluded.old_path,
+                            new_path=excluded.new_path,
+                            old_category=excluded.old_category,
+                            new_category=excluded.new_category,
+                            old_answer=excluded.old_answer,
+                            new_answer=excluded.new_answer,
+                            reason=excluded.reason""",
+                        (
+                            subject,
+                            bank_version,
+                            item_index,
+                            change["change_type"],
+                            change["logical_id"],
+                            change.get("question_id"),
+                            change.get("old_path"),
+                            change.get("new_path"),
+                            change.get("old_category"),
+                            change.get("new_category"),
+                            normalize_answer(str(change.get("old_answer") or "")),
+                            normalize_answer(str(change.get("new_answer") or "")),
+                            str(change.get("reason") or ""),
+                        ),
+                    )
             for revision in revisions:
                 connection.execute(
                     """INSERT INTO question_revisions(

@@ -44,6 +44,7 @@ def bootstrap(
     assert result.initialized
     assert not result.changes
     assert database.latest_bank_version(subject.name) == 1
+    assert database.pending_question_bank_notification(subject.name) is None
     return checker
 
 
@@ -82,8 +83,40 @@ def test_add_creates_new_bank_version_and_only_resolves_new_question(
         "True_False/Câu 2.png": "B",
     }
     assert database.latest_bank_version(subject.name) == 2
+    pending = database.pending_question_bank_notification(subject.name)
+    assert pending is not None
+    version, items = pending
+    assert version == 2
+    assert items == [
+        {
+            "item_index": 0,
+            "change_type": "ADD",
+            "logical_id": subject.questions[-1].id,
+            "question_id": subject.questions[-1].id,
+            "old_path": None,
+            "new_path": "True_False/Câu 2.png",
+            "old_category": None,
+            "new_category": "True_False",
+            "old_answer": "",
+            "new_answer": "B",
+            "reason": "new-path",
+            "viewed_at": None,
+        }
+    ]
     assert (subject_path / "answer_versions" / "answers.v1.csv").exists()
     assert (subject_path / "answer_versions" / "answers.v2.csv").exists()
+
+    database.mark_question_bank_notification_item_viewed(subject.name, version, 0)
+    database.close()
+    database = Database(tmp_path / "progress.sqlite3")
+    resumed = database.pending_question_bank_notification(subject.name)
+    assert resumed is not None and resumed[1][0]["viewed_at"] is not None
+    assert database.complete_question_bank_notification(subject.name, version)
+    assert database.pending_question_bank_notification(subject.name) is None
+    database.close()
+
+    database = Database(tmp_path / "progress.sqlite3")
+    assert database.pending_question_bank_notification(subject.name) is None
     database.close()
 
 
@@ -151,6 +184,16 @@ def test_category_and_answer_update_regrades_every_historical_exam(
         (subject_v2.name,),
     ).fetchall()
     assert [(row["revision"], row["active"]) for row in revisions] == [(1, 0), (2, 1)]
+    pending = database.pending_question_bank_notification(subject_v2.name)
+    assert pending is not None
+    update = pending[1][0]
+    assert update["change_type"] == "UPDATE"
+    assert update["old_path"] == "Selections_1_choose/Câu 186.png"
+    assert update["new_path"] == "Selections_Multiple_choose/Câu 186.png"
+    assert update["old_category"] == "Selections_1_choose"
+    assert update["new_category"] == "Selections_Multiple_choose"
+    assert update["old_answer"] == "A"
+    assert update["new_answer"] == "AD"
     database.close()
 
 
@@ -216,6 +259,13 @@ def test_delete_only_deactivates_question_and_preserves_exam_history(
     assert len(manifest["questions"]) == 1
     report = AnswerKeyRepository().load(subject_v2.path, subject_v2.questions)
     assert list(report.answers) == ["Selections_1_choose/Câu 1.png"]
+    pending = database.pending_question_bank_notification(subject_v2.name)
+    assert pending is not None
+    deleted_change = pending[1][0]
+    assert deleted_change["change_type"] == "DELETE"
+    assert deleted_change["old_path"] == "Selections_1_choose/Câu 2.png"
+    assert deleted_change["new_path"] is None
+    assert deleted_change["old_answer"] == "B"
     database.close()
 
 

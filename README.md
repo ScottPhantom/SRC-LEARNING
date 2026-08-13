@@ -9,7 +9,7 @@
 Giao diện và thông báo của ứng dụng sử dụng tiếng Việt. Tiến trình học và kết quả thi được lưu cục bộ trong `study_progress.sqlite3`.
 
 Trước khi nâng cấp một database có schema cũ, ứng dụng tự tạo bản backup SQLite
-nhất quán cùng thư mục, theo mẫu
+nhất quán trong `backups/database/`, theo mẫu
 `study_progress.pre-v<version>.<UTC timestamp>.sqlite3`. Migration chỉ bắt đầu
 sau khi bản backup vượt qua `PRAGMA integrity_check`; nếu backup thất bại, ứng
 dụng dừng khởi động và giữ nguyên database cũ.
@@ -140,6 +140,12 @@ Nếu OCR không đọc được hoặc trả về đáp án sai loại, script 
 Sau khi môn học đã có manifest version, script không ghi đè answer bank đang
 active mà ghi kết quả vào `answers.pending.csv` để checker kiểm tra và áp dụng.
 
+Khi chạy trực tiếp trong terminal, nếu OCR không nhận diện được đáp án thì tool
+hiển thị môn học, đường dẫn ảnh, loại câu và quy tắc hợp lệ, sau đó yêu cầu dev
+nhập đáp án. Tool tiếp tục hỏi cho đến khi nhận đáp án hợp lệ hoặc dev gõ
+`skip`. Câu bị skip không thể được dùng để kích hoạt bank version mới. Dùng
+`--non-interactive` cho CI hoặc tác vụ tự động không được phép chờ nhập liệu.
+
 ## Version hóa và cập nhật bộ câu hỏi
 
 Khi khởi động, SRC Learning tự chạy bộ kiểm tra độc lập để so sánh `DATA` với
@@ -177,6 +183,9 @@ python tools/check_question_bank_updates.py --data-dir DATA --subject ITE303c
 ```bash
 python tools/check_question_bank_updates.py --data-dir DATA --subject ITE303c --apply
 ```
+
+Lệnh `--apply` cũng thử OCR trước và yêu cầu nhập thủ công từng câu ADD/UPDATE
+nếu OCR thất bại. Nếu dev gõ `skip`, toàn bộ version đề xuất không được kích hoạt.
 
 ## Chạy ứng dụng
 
