@@ -26,7 +26,9 @@ def test_crop_answer_uses_relative_coordinates() -> None:
 def test_recognize_normalizes_tesseract_output(
     monkeypatch, ocr_text: str, multiple: bool, expected: str
 ) -> None:
-    monkeypatch.setattr(build_answers.pytesseract, "image_to_string", lambda *a, **k: ocr_text)
+    monkeypatch.setattr(
+        build_answers.pytesseract, "image_to_string", lambda *a, **k: ocr_text
+    )
     crop = np.full((50, 250, 3), 255, dtype=np.uint8)
     assert build_answers.recognize(crop, multiple) == expected
 
@@ -49,3 +51,15 @@ def test_recognize_retries_when_first_ocr_result_is_empty(monkeypatch) -> None:
 def test_parse_region_rejects_outside_image() -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         build_answers.parse_region("0.9,0.9,0.2,0.2")
+
+
+def test_versioned_bank_writes_ocr_result_to_pending_file(tmp_path) -> None:
+    subject_path = tmp_path / "TEST101"
+    subject_path.mkdir()
+    assert build_answers.answer_output_path(subject_path).name == "answers.csv"
+
+    versions = subject_path / "answer_versions"
+    versions.mkdir()
+    (versions / "manifest.json").write_text("{}", encoding="utf-8")
+
+    assert build_answers.answer_output_path(subject_path).name == "answers.pending.csv"

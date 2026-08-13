@@ -51,15 +51,27 @@ def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.Im
 
 def load_rows(connection: sqlite3.Connection, subject: str) -> list[dict[str, object]]:
     connection.row_factory = sqlite3.Row
+    version_row = connection.execute(
+        """SELECT bank_version FROM question_bank_versions
+        WHERE subject=? AND active=1 ORDER BY bank_version DESC LIMIT 1""",
+        (subject,),
+    ).fetchone()
+    bank_version = int(version_row["bank_version"]) if version_row else 0
+    revision_filter = (
+        "AND EXISTS (SELECT 1 FROM question_revisions qr "
+        "WHERE qr.subject=q.subject AND qr.question_id=q.id AND qr.active=1)"
+        if bank_version
+        else ""
+    )
     rows = connection.execute(
-        """SELECT q.id, q.subject, q.category, q.relative_path,
+        f"""SELECT q.id, q.subject, q.category, q.relative_path,
         COUNT(ea.question_id) appearances,
         COALESCE(qes.total_attempts, 0) total_attempts,
         COALESCE(qes.wrong_count, 0) wrong_count
         FROM questions q
         LEFT JOIN exam_answers ea ON ea.question_id=q.id
         LEFT JOIN question_error_stats qes ON qes.question_id=q.id
-        WHERE q.active=1 AND q.subject=?
+        WHERE q.active=1 AND q.subject=? {revision_filter}
         GROUP BY q.id
         ORDER BY appearances DESC, q.category, q.relative_path""",
         (subject,),
@@ -74,6 +86,7 @@ def load_rows(connection: sqlite3.Connection, subject: str) -> list[dict[str, ob
                 "subject": str(row["subject"]),
                 "category": str(row["category"]),
                 "relative_path": str(row["relative_path"]),
+                "bank_version": bank_version,
                 "appearances": int(row["appearances"]),
                 "total_attempts": attempts,
                 "wrong_count": wrong,
@@ -442,11 +455,21 @@ def main() -> None:
             rows = load_rows(connection, subject)
             if not rows:
                 continue
-            exam_count = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM exam_attempts WHERE subject=?", (subject,)
-                ).fetchone()[0]
-            )
+            bank_version = int(rows[0].get("bank_version", 0))
+            if bank_version:
+                exam_count = int(
+                    connection.execute(
+                        """SELECT COUNT(*) FROM exam_attempts
+                        WHERE subject=? AND graded_bank_version=?""",
+                        (subject, bank_version),
+                    ).fetchone()[0]
+                )
+            else:
+                exam_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM exam_attempts WHERE subject=?", (subject,)
+                    ).fetchone()[0]
+                )
             png_path, csv_path = reserve_output_paths(
                 args.output_dir, subject, generated_at
             )

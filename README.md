@@ -137,6 +137,46 @@ python tools/build_answers.py --data-dir DATA --region 0,0.88,0.30,0.12
 ```
 
 Nếu OCR không đọc được hoặc trả về đáp án sai loại, script để trống `correct_answer`, in `WARNING` và tiếp tục. Mở CSV bằng trình soạn thảo hỗ trợ UTF-8 để điền các ô trống, không đổi tên hai cột.
+Sau khi môn học đã có manifest version, script không ghi đè answer bank đang
+active mà ghi kết quả vào `answers.pending.csv` để checker kiểm tra và áp dụng.
+
+## Version hóa và cập nhật bộ câu hỏi
+
+Khi khởi động, SRC Learning tự chạy bộ kiểm tra độc lập để so sánh `DATA` với
+answer bank đang active. Mọi thay đổi `ADD`, `UPDATE` hoặc `DELETE` đều tạo một
+`bank_version` mới trong `DATA/<Môn học>/answer_versions/`:
+
+- `answers.vN.csv`: snapshot đáp án bất biến của version N.
+- `manifest.vN.json`: question ID, revision, category, hash ảnh và trạng thái.
+- `changes.vN-to-vN+1.csv`: báo cáo ADD/UPDATE/DELETE.
+- `manifest.json`: manifest của version active mới nhất.
+
+`answers.csv` luôn là bản active mới nhất. Câu bị xóa chỉ được deactivate; lịch
+sử thi không bị xóa. Khi category hoặc đáp án đổi, toàn bộ Mock Exam từng chứa
+câu đó được chấm lại, bao gồm partial credit, điểm từng câu và tổng điểm.
+
+Nếu ảnh mới không chứa vùng đáp án để OCR, tạo file tùy chọn
+`DATA/<Môn học>/answers.pending.csv` với cùng hai cột để cung cấp đáp án đã xác
+nhận. File này được lưu vào thư mục version sau khi cập nhật thành công:
+
+```csv
+image_name,correct_answer
+Selections_Multiple_choose/Câu 186.png,AD
+Selections_1_choose/Câu 299.png,C
+True_False/Câu 298.png,B
+```
+
+Kiểm tra mà không thay đổi dữ liệu:
+
+```bash
+python tools/check_question_bank_updates.py --data-dir DATA --subject ITE303c
+```
+
+Áp dụng version mới và chấm lại lịch sử:
+
+```bash
+python tools/check_question_bank_updates.py --data-dir DATA --subject ITE303c --apply
+```
 
 ## Chạy ứng dụng
 

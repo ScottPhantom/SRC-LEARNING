@@ -4,16 +4,16 @@ import json
 import logging
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.domain.models import AppSettings, Question, QuestionErrorStat
+from app.domain.models import AppSettings, Question, QuestionErrorStat, normalize_answer
 
 LOGGER = logging.getLogger(__name__)
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 def utc_now() -> str:
@@ -206,7 +206,9 @@ class Database:
             correct INTEGER NOT NULL,
             unanswered INTEGER NOT NULL,
             score_percent REAL NOT NULL,
-            score REAL NOT NULL DEFAULT 0.0
+            score REAL NOT NULL DEFAULT 0.0,
+            bank_version INTEGER NOT NULL DEFAULT 1,
+            graded_bank_version INTEGER NOT NULL DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS exam_answers (
             attempt_id INTEGER NOT NULL REFERENCES exam_attempts(id) ON DELETE CASCADE,
@@ -219,11 +221,43 @@ class Database:
             awarded_score REAL NOT NULL DEFAULT 0.0,
             PRIMARY KEY(attempt_id, position)
         );
+
+        CREATE TABLE IF NOT EXISTS question_bank_versions (
+            subject TEXT NOT NULL,
+            bank_version INTEGER NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            question_count INTEGER NOT NULL,
+            added_count INTEGER NOT NULL DEFAULT 0,
+            updated_count INTEGER NOT NULL DEFAULT 0,
+            deleted_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(subject, bank_version)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS one_active_bank_version_per_subject
+            ON question_bank_versions(subject) WHERE active=1;
+
+        CREATE TABLE IF NOT EXISTS question_revisions (
+            subject TEXT NOT NULL,
+            logical_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            question_id TEXT NOT NULL,
+            bank_version INTEGER NOT NULL,
+            relative_path TEXT NOT NULL,
+            category TEXT NOT NULL,
+            correct_answer TEXT NOT NULL,
+            file_sha256 TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            supersedes_question_id TEXT,
+            PRIMARY KEY(subject, logical_id, revision)
+        );
+        CREATE INDEX IF NOT EXISTS idx_question_revisions_active
+            ON question_revisions(subject, active, question_id);
         """
         with self.transaction() as connection:
             connection.executescript(schema)
             attempt_columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(exam_attempts)")
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(exam_attempts)")
             }
             if "score" not in attempt_columns:
                 connection.execute(
@@ -232,8 +266,19 @@ class Database:
                 connection.execute(
                     "UPDATE exam_attempts SET score=ROUND(score_percent / 10.0, 2)"
                 )
+            if "bank_version" not in attempt_columns:
+                connection.execute(
+                    "ALTER TABLE exam_attempts ADD COLUMN bank_version "
+                    "INTEGER NOT NULL DEFAULT 1"
+                )
+            if "graded_bank_version" not in attempt_columns:
+                connection.execute(
+                    "ALTER TABLE exam_attempts ADD COLUMN graded_bank_version "
+                    "INTEGER NOT NULL DEFAULT 1"
+                )
             answer_columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(exam_answers)")
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(exam_answers)")
             }
             if "awarded_score" not in answer_columns:
                 connection.execute(
@@ -247,7 +292,8 @@ class Database:
                     ) ELSE 0.0 END, 2)"""
                 )
             cram_columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(cram_cycles)")
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(cram_cycles)")
             }
             if "grading_mode" not in cram_columns:
                 connection.execute(
@@ -302,6 +348,226 @@ class Database:
                 (key, str(value)),
             )
 
+    def latest_bank_version(self, subject: str) -> int:
+        row = self._connection.execute(
+            """SELECT bank_version FROM question_bank_versions
+            WHERE subject=? AND active=1 ORDER BY bank_version DESC LIMIT 1""",
+            (subject,),
+        ).fetchone()
+        return int(row["bank_version"]) if row else 1
+
+    @staticmethod
+    def _score_saved_answer(
+        selected_answer: str,
+        correct_answer: str,
+        category: str,
+        question_value: float,
+    ) -> tuple[bool, float]:
+        selected = set(normalize_answer(selected_answer))
+        correct = set(normalize_answer(correct_answer))
+        is_correct = bool(correct) and selected == correct
+        if not selected or not correct:
+            return is_correct, 0.0
+        if category != "Selections_Multiple_choose":
+            return is_correct, question_value if is_correct else 0.0
+        correct_selected = len(selected & correct)
+        wrong_selected = len(selected - correct)
+        raw_score = (correct_selected - wrong_selected) * (
+            question_value / len(correct)
+        )
+        return is_correct, max(0.0, min(question_value, raw_score))
+
+    def apply_question_bank_update(
+        self,
+        *,
+        subject: str,
+        bank_version: int,
+        revisions: Sequence[dict[str, Any]],
+        updates: Sequence[dict[str, str]],
+        question_count: int,
+        added_count: int,
+        deleted_count: int,
+        finalize: Callable[[], None] | None = None,
+    ) -> None:
+        """Persist one bank version and regrade every affected Mock Exam atomically."""
+
+        now = utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                "UPDATE question_bank_versions SET active=0 WHERE subject=?",
+                (subject,),
+            )
+            connection.execute(
+                "UPDATE question_revisions SET active=0 WHERE subject=?",
+                (subject,),
+            )
+            connection.execute(
+                """INSERT INTO question_bank_versions(
+                subject,bank_version,active,created_at,question_count,
+                added_count,updated_count,deleted_count
+                ) VALUES(?,?,1,?,?,?,?,?)
+                ON CONFLICT(subject,bank_version) DO UPDATE SET
+                    active=1, created_at=excluded.created_at,
+                    question_count=excluded.question_count,
+                    added_count=excluded.added_count,
+                    updated_count=excluded.updated_count,
+                    deleted_count=excluded.deleted_count""",
+                (
+                    subject,
+                    bank_version,
+                    now,
+                    question_count,
+                    added_count,
+                    len(updates),
+                    deleted_count,
+                ),
+            )
+            for revision in revisions:
+                connection.execute(
+                    """INSERT INTO question_revisions(
+                    subject,logical_id,revision,question_id,bank_version,
+                    relative_path,category,correct_answer,file_sha256,active,
+                    supersedes_question_id
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(subject,logical_id,revision) DO UPDATE SET
+                        question_id=excluded.question_id,
+                        bank_version=excluded.bank_version,
+                        relative_path=excluded.relative_path,
+                        category=excluded.category,
+                        correct_answer=excluded.correct_answer,
+                        file_sha256=excluded.file_sha256,
+                        active=excluded.active,
+                        supersedes_question_id=excluded.supersedes_question_id""",
+                    (
+                        subject,
+                        revision["logical_id"],
+                        int(revision["revision"]),
+                        revision["question_id"],
+                        int(revision["bank_version"]),
+                        revision["relative_path"],
+                        revision["category"],
+                        normalize_answer(str(revision.get("answer", ""))),
+                        revision.get("file_sha256", ""),
+                        int(bool(revision.get("active", True))),
+                        revision.get("supersedes_question_id"),
+                    ),
+                )
+
+            affected_attempt_ids: set[int] = set()
+            affected_question_ids: set[str] = set()
+            for update in updates:
+                old_id = update["old_question_id"]
+                new_id = update["new_question_id"]
+                affected_question_ids.update((old_id, new_id))
+                rows = connection.execute(
+                    "SELECT DISTINCT attempt_id FROM exam_answers WHERE question_id=?",
+                    (old_id,),
+                ).fetchall()
+                affected_attempt_ids.update(int(row["attempt_id"]) for row in rows)
+                connection.execute(
+                    """UPDATE exam_answers SET question_id=?, relative_path=?,
+                    correct_answer=? WHERE question_id=?""",
+                    (
+                        new_id,
+                        update["relative_path"],
+                        normalize_answer(update["answer"]),
+                        old_id,
+                    ),
+                )
+                # A corrected answer/category invalidates the former mastery state.
+                connection.execute(
+                    "DELETE FROM card_progress WHERE question_id IN (?,?)",
+                    (old_id, new_id),
+                )
+
+            for attempt_id in affected_attempt_ids:
+                attempt = connection.execute(
+                    "SELECT total FROM exam_attempts WHERE id=?", (attempt_id,)
+                ).fetchone()
+                if attempt is None:
+                    continue
+                total = int(attempt["total"])
+                question_value = 10.0 / total if total else 0.0
+                answer_rows = connection.execute(
+                    """SELECT ea.position,ea.selected_answer,ea.correct_answer,
+                    COALESCE(q.category, substr(ea.relative_path,1,
+                        instr(ea.relative_path,'/')-1)) category
+                    FROM exam_answers ea
+                    LEFT JOIN questions q ON q.id=ea.question_id
+                    WHERE ea.attempt_id=? ORDER BY ea.position""",
+                    (attempt_id,),
+                ).fetchall()
+                raw_total = 0.0
+                correct_count = 0
+                unanswered = 0
+                for answer_row in answer_rows:
+                    selected = str(answer_row["selected_answer"])
+                    is_correct, raw_score = self._score_saved_answer(
+                        selected,
+                        str(answer_row["correct_answer"]),
+                        str(answer_row["category"]),
+                        question_value,
+                    )
+                    raw_total += raw_score
+                    correct_count += int(is_correct)
+                    unanswered += int(not normalize_answer(selected))
+                    connection.execute(
+                        """UPDATE exam_answers SET is_correct=?, awarded_score=?
+                        WHERE attempt_id=? AND position=?""",
+                        (
+                            int(is_correct),
+                            round(raw_score, 2),
+                            attempt_id,
+                            int(answer_row["position"]),
+                        ),
+                    )
+                score = round(raw_total, 2)
+                connection.execute(
+                    """UPDATE exam_attempts SET correct=?,unanswered=?,score=?,
+                    score_percent=?,graded_bank_version=? WHERE id=?""",
+                    (
+                        correct_count,
+                        unanswered,
+                        score,
+                        round(score * 10.0, 2),
+                        bank_version,
+                        attempt_id,
+                    ),
+                )
+
+            if affected_question_ids:
+                placeholders = ",".join("?" for _ in affected_question_ids)
+                connection.execute(
+                    f"DELETE FROM question_error_stats WHERE question_id IN ({placeholders})",
+                    list(affected_question_ids),
+                )
+                for update in updates:
+                    new_id = update["new_question_id"]
+                    stats = connection.execute(
+                        """SELECT COUNT(*) total_attempts,
+                        COALESCE(SUM(CASE WHEN is_correct=0 THEN 1 ELSE 0 END),0) wrong_count
+                        FROM exam_answers WHERE question_id=? AND selected_answer<>''""",
+                        (new_id,),
+                    ).fetchone()
+                    if stats and int(stats["total_attempts"]) > 0:
+                        connection.execute(
+                            """INSERT INTO question_error_stats(
+                            question_id,total_attempts,wrong_count,updated_at
+                            ) VALUES(?,?,?,?)""",
+                            (
+                                new_id,
+                                int(stats["total_attempts"]),
+                                int(stats["wrong_count"]),
+                                now,
+                            ),
+                        )
+            connection.execute(
+                "UPDATE exam_attempts SET graded_bank_version=? WHERE subject=?",
+                (bank_version, subject),
+            )
+            if finalize is not None:
+                finalize()
+
     def load_app_settings(self, default_data_dir: Path) -> AppSettings:
         def as_float(key: str, default: float) -> float:
             try:
@@ -337,7 +603,8 @@ class Database:
     # Flashcard ---------------------------------------------------------
     def active_flash_session(self, subject: str) -> sqlite3.Row | None:
         return self._connection.execute(
-            "SELECT * FROM flash_sessions WHERE subject=? AND status='active'", (subject,)
+            "SELECT * FROM flash_sessions WHERE subject=? AND status='active'",
+            (subject,),
         ).fetchone()
 
     def create_flash_session(
@@ -377,11 +644,18 @@ class Database:
         ).fetchall()
         return [str(row["question_id"]) for row in rows]
 
-    def update_flash_position(self, session_id: int, position: int, complete: bool) -> None:
+    def update_flash_position(
+        self, session_id: int, position: int, complete: bool
+    ) -> None:
         with self.transaction() as connection:
             connection.execute(
                 "UPDATE flash_sessions SET current_position=?, status=?, updated_at=? WHERE id=?",
-                (position, "completed" if complete else "active", utc_now(), session_id),
+                (
+                    position,
+                    "completed" if complete else "active",
+                    utc_now(),
+                    session_id,
+                ),
             )
 
     def rate_card(self, question_id: str, known: bool) -> None:
@@ -496,7 +770,8 @@ class Database:
 
     def latest_cram_cycle(self, subject: str) -> sqlite3.Row | None:
         return self._connection.execute(
-            "SELECT * FROM cram_cycles WHERE subject=? ORDER BY id DESC LIMIT 1", (subject,)
+            "SELECT * FROM cram_cycles WHERE subject=? ORDER BY id DESC LIMIT 1",
+            (subject,),
         ).fetchone()
 
     def cram_cycle_question_ids(self, cycle_id: int) -> list[str]:
@@ -597,7 +872,9 @@ class Database:
                 "UPDATE cram_cycles SET updated_at=? WHERE id=?", (utc_now(), cycle_id)
             )
 
-    def rate_cram_item(self, cycle_id: int, question_id: str, correct: bool) -> dict[str, Any]:
+    def rate_cram_item(
+        self, cycle_id: int, question_id: str, correct: bool
+    ) -> dict[str, Any]:
         with self.transaction() as connection:
             cycle = connection.execute(
                 "SELECT * FROM cram_cycles WHERE id=? AND status='active'", (cycle_id,)
@@ -655,7 +932,8 @@ class Database:
                     )
             else:
                 connection.execute(
-                    "UPDATE cram_cycles SET updated_at=? WHERE id=?", (utc_now(), cycle_id)
+                    "UPDATE cram_cycles SET updated_at=? WHERE id=?",
+                    (utc_now(), cycle_id),
                 )
             return {
                 "completed": completed,
@@ -711,11 +989,13 @@ class Database:
         unanswered = sum(not item["selected_answer"] for item in answers)
         rounded_score = round(float(score), 2)
         score_percent = round(rounded_score * 10.0, 2)
+        bank_version = self.latest_bank_version(subject)
         with self.transaction() as connection:
             cursor = connection.execute(
                 """INSERT INTO exam_attempts
                 (subject,config_json,started_at,submitted_at,submit_reason,total,correct,
-                 unanswered,score_percent,score) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                 unanswered,score_percent,score,bank_version,graded_bank_version)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     subject,
                     json.dumps(config, ensure_ascii=False),
@@ -727,6 +1007,8 @@ class Database:
                     unanswered,
                     score_percent,
                     rounded_score,
+                    bank_version,
+                    bank_version,
                 ),
             )
             attempt_id = int(cursor.lastrowid)
@@ -761,11 +1043,14 @@ class Database:
         if subject:
             return list(
                 self._connection.execute(
-                    "SELECT * FROM exam_attempts WHERE subject=? ORDER BY id DESC", (subject,)
+                    "SELECT * FROM exam_attempts WHERE subject=? ORDER BY id DESC",
+                    (subject,),
                 ).fetchall()
             )
         return list(
-            self._connection.execute("SELECT * FROM exam_attempts ORDER BY id DESC").fetchall()
+            self._connection.execute(
+                "SELECT * FROM exam_attempts ORDER BY id DESC"
+            ).fetchall()
         )
 
     def exam_detail(self, attempt_id: int) -> list[sqlite3.Row]:

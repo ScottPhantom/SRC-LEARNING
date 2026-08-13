@@ -659,7 +659,7 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
     assert attempt["score"] == 5.0
     assert [row["awarded_score"] for row in database.exam_detail(1)] == [5.0, 0.0]
     version = database._connection.execute("SELECT version FROM schema_version").fetchone()[0]
-    assert version == 4
+    assert version == 5
     tables = {
         row["name"]
         for row in database._connection.execute(

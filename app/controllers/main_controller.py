@@ -29,6 +29,11 @@ from app.repositories.answer_key import AnswerKeyReport, AnswerKeyRepository
 from app.repositories.database import Database
 from app.services.adaptive import AdaptiveReviewService
 from app.services.exam import ExamResult, ExamService, ExamSession
+from app.services.question_bank_updates import (
+    PENDING_ANSWERS_FILE,
+    BankUpdateResult,
+    QuestionBankUpdateChecker,
+)
 from app.services.study import CrammingService, FlashcardService
 from app.ui.background import AppShell
 from app.ui.screens import (
@@ -102,6 +107,7 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self._scan_running = False
         self._rescan_requested = False
+        self._bank_update_dialogs: list[QMessageBox] = []
         self.theme_manager = ThemeManager(QApplication.instance())
         self._apply_theme(self.settings.theme)
         self.refresh_data()
@@ -191,13 +197,9 @@ class MainWindow(QMainWindow):
         dialog.setObjectName("activeExamExitDialog")
         dialog.setWindowTitle("Rời bài thi")
         dialog.setIcon(QMessageBox.Warning)
-        dialog.setText(
-            "Bài thi đang làm sẽ không được lưu. Bạn muốn xử lý thế nào?"
-        )
+        dialog.setText("Bài thi đang làm sẽ không được lưu. Bạn muốn xử lý thế nào?")
         cancel_button = dialog.addButton("Cancel", QMessageBox.RejectRole)
-        submit_button = dialog.addButton(
-            "Yes — Nộp và Thoát", QMessageBox.AcceptRole
-        )
+        submit_button = dialog.addButton("Yes — Nộp và Thoát", QMessageBox.AcceptRole)
         discard_button = dialog.addButton(
             "No — Thoát và Không lưu", QMessageBox.DestructiveRole
         )
@@ -261,15 +263,55 @@ class MainWindow(QMainWindow):
 
     def _apply_subjects(self, subjects: list[Subject]) -> None:
         self.subjects = {subject.name: subject for subject in subjects}
-        all_questions = [question for subject in subjects for question in subject.questions]
-        self.database.sync_questions(all_questions, [subject.name for subject in subjects])
+        all_questions = [
+            question for subject in subjects for question in subject.questions
+        ]
+        self.database.sync_questions(
+            all_questions, [subject.name for subject in subjects]
+        )
+        bank_results = QuestionBankUpdateChecker(
+            self.database, self.settings.crop_region
+        ).check(subjects, apply=True)
         answer_repository = AnswerKeyRepository()
         self.answer_reports = {
             subject.name: answer_repository.load(subject.path, subject.questions)
             for subject in subjects
         }
         self.home.set_subjects(subjects, self.data_dir)
+        self._notify_bank_updates(bank_results)
         self._reset_watch_paths(subjects)
+
+    def _notify_bank_updates(self, results: list[BankUpdateResult]) -> None:
+        messages = [
+            f"{result.subject}\n{result.notification}"
+            for result in results
+            if result.applied and result.notification
+        ]
+        errors = [
+            f"{result.subject}: " + "; ".join(result.errors)
+            for result in results
+            if result.errors
+        ]
+        if errors:
+            LOGGER.warning("Question bank update chưa hoàn tất: %s", " | ".join(errors))
+            self.home.notice.setText("Lỗi cập nhật đáp án: " + " | ".join(errors))
+        if not messages:
+            return
+        dialog = QMessageBox(self)
+        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+        dialog.setWindowTitle("Bộ câu hỏi đã được cập nhật")
+        dialog.setIcon(QMessageBox.Information)
+        dialog.setText("\n\n".join(messages))
+        dialog.setStandardButtons(QMessageBox.Ok)
+        dialog.finished.connect(
+            lambda _result, current=dialog: (
+                self._bank_update_dialogs.remove(current)
+                if current in self._bank_update_dialogs
+                else None
+            )
+        )
+        self._bank_update_dialogs.append(dialog)
+        dialog.show()
 
     def _reset_watch_paths(self, subjects: list[Subject]) -> None:
         old_paths = self.watcher.directories() + self.watcher.files()
@@ -284,6 +326,9 @@ class MainWindow(QMainWindow):
             csv_path = subject.path / AnswerKeyRepository.FILE_NAME
             if csv_path.exists():
                 paths.append(str(csv_path))
+            pending_path = subject.path / PENDING_ANSWERS_FILE
+            if pending_path.exists():
+                paths.append(str(pending_path))
         if paths:
             missing = self.watcher.addPaths(paths)
             if missing:
@@ -295,7 +340,9 @@ class MainWindow(QMainWindow):
     def show_modes(self, subject_name: str) -> None:
         subject = self.subjects.get(subject_name)
         if subject is None:
-            QMessageBox.warning(self, "Môn học không tồn tại", "Hãy bấm Làm mới và thử lại.")
+            QMessageBox.warning(
+                self, "Môn học không tồn tại", "Hãy bấm Làm mới và thử lại."
+            )
             return
         self.current_subject = subject
         report = self.answer_reports[subject.name]
@@ -352,13 +399,17 @@ class MainWindow(QMainWindow):
         if self.current_subject is None:
             raise RuntimeError("Chưa chọn môn học")
         report = self.answer_reports[self.current_subject.name]
-        return ExamService(self.database, self.current_subject.questions, report.answers)
+        return ExamService(
+            self.database, self.current_subject.questions, report.answers
+        )
 
     def show_exam_config(self, animate: bool = False) -> None:
         if self.current_subject is None:
             return
         subject = self.current_subject
-        page = ExamConfigScreen(subject, self._exam_service(), self.answer_reports[subject.name])
+        page = ExamConfigScreen(
+            subject, self._exam_service(), self.answer_reports[subject.name]
+        )
         page.back_requested.connect(lambda: self.show_modes(subject.name))
         page.exam_requested.connect(self.start_exam)
         self._set_dynamic_page(page, animate=animate)
@@ -418,7 +469,9 @@ class MainWindow(QMainWindow):
             self.app_header.update_theme()
         if hasattr(self, "home"):
             self.home.update_theme()
-        if self._dynamic_page is not None and hasattr(self._dynamic_page, "update_theme"):
+        if self._dynamic_page is not None and hasattr(
+            self._dynamic_page, "update_theme"
+        ):
             self._dynamic_page.update_theme()
 
     def show_settings(self) -> None:
@@ -491,7 +544,9 @@ class MainWindow(QMainWindow):
                 if files:
                     self.watcher.removePaths(files)
             except RuntimeError as exc:
-                LOGGER.debug("File watcher was already disposed during shutdown: %s", exc)
+                LOGGER.debug(
+                    "File watcher was already disposed during shutdown: %s", exc
+                )
         if hasattr(self, "thread_pool"):
             self.thread_pool.clear()
             self.thread_pool.waitForDone(1500)
