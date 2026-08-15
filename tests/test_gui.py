@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import os
 from pathlib import Path
 
@@ -665,6 +666,85 @@ def test_learning_dashboard_rates_cards_and_updates_progress_directly(
 
     dialog.close()
     screen.close()
+    database.close()
+
+
+def test_subject_dashboard_refreshes_after_new_question_bank_item(
+    tmp_path: Path, monkeypatch
+) -> None:
+    subject = make_subject(tmp_path, 1)
+    answers_path = subject.path / "answers.csv"
+    with answers_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerow([subject.questions[0].relative_path, "A"])
+
+    database = Database(tmp_path / "dashboard-refresh.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    window.watcher.blockSignals(True)
+    window.show_modes(subject.name)
+    old_page = window._dynamic_page
+    assert isinstance(old_page, ModeScreen)
+    assert old_page.learning_tables["Selections_1_choose"].rowCount() == 1
+
+    new_image = subject.path / "Selections_1_choose" / "Câu 1.png"
+    Image.new("RGB", (1000, 500), "white").save(new_image)
+    with (subject.path / "answers.pending.csv").open(
+        "w", encoding="utf-8-sig", newline=""
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerow(["Selections_1_choose/Câu 1.png", "B"])
+
+    updated_subject = DataScannerService(tmp_path / "DATA").scan()[0]
+    monkeypatch.setattr(window, "_show_pending_bank_notification", lambda *_args: None)
+    window._apply_subjects([updated_subject])
+    QT_APP.processEvents()
+
+    refreshed_page = window._dynamic_page
+    assert isinstance(refreshed_page, ModeScreen)
+    assert refreshed_page is not old_page
+    assert window.answer_reports[subject.name].valid_count == 2
+    table = refreshed_page.learning_tables["Selections_1_choose"]
+    displayed_names = [table.item(row, 0).text() for row in range(table.rowCount())]
+    assert displayed_names == ["Câu 0.png", "Câu 1.png"]
+    assert displayed_names.count("Câu 1.png") == 1
+    added_question = next(
+        question
+        for question in updated_subject.questions
+        if question.relative_path == "Selections_1_choose/Câu 1.png"
+    )
+    assert database.card_stats(subject.name) == {
+        "new": 2,
+        "known": 0,
+        "learning": 0,
+    }
+
+    refreshed_page._handle_learning_rating(added_question.id, known=False)
+    assert database.card_stats(subject.name) == {
+        "new": 1,
+        "known": 0,
+        "learning": 1,
+    }
+    assert table.rowCount() == 2
+
+    refreshed_page._handle_learning_rating(added_question.id, known=True)
+    assert database.card_stats(subject.name) == {
+        "new": 1,
+        "known": 1,
+        "learning": 0,
+    }
+    assert [table.item(row, 0).text() for row in range(table.rowCount())] == [
+        "Câu 0.png"
+    ]
+
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    window.deleteLater()
+    QT_APP.processEvents()
     database.close()
 
 

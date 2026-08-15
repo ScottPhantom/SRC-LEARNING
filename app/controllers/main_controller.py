@@ -263,6 +263,10 @@ class MainWindow(QMainWindow):
             self.refresh_data()
 
     def _apply_subjects(self, subjects: list[Subject]) -> None:
+        selected_subject_name = (
+            self.current_subject.name if self.current_subject is not None else None
+        )
+        refresh_subject_dashboard = isinstance(self._dynamic_page, ModeScreen)
         self.subjects = {subject.name: subject for subject in subjects}
         all_questions = [
             question for subject in subjects for question in subject.questions
@@ -281,6 +285,13 @@ class MainWindow(QMainWindow):
         self.home.set_subjects(subjects, self.data_dir)
         self._report_bank_update_errors(bank_results)
         self._reset_watch_paths(subjects)
+        if selected_subject_name is not None:
+            self.current_subject = self.subjects.get(selected_subject_name)
+        if refresh_subject_dashboard and self.current_subject is not None:
+            # ModeScreen owns a snapshot of the dashboard rows. Rebuild it after
+            # a successful scan so newly synchronized questions are visible now,
+            # without requiring the user to leave and re-enter the subject.
+            self.show_modes(self.current_subject.name)
 
     def _report_bank_update_errors(self, results: list[BankUpdateResult]) -> None:
         errors = [

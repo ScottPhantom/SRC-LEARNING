@@ -26,17 +26,16 @@ class AdaptiveReviewService:
         self.answers = dict(answers)
 
     def learning_by_category(self) -> dict[str, list[LearningQuestionReview]]:
-        """Trả về toàn bộ câu Chưa thuộc, giữ nguyên thứ tự file đã quét."""
+        """Trả về câu mới và Chưa thuộc, giữ nguyên thứ tự file đã quét."""
         result: dict[str, list[LearningQuestionReview]] = {
             category: [] for category in CATEGORIES
         }
-        learning_ids = set(
-            self.database.learning_question_ids(
-                self.questions[0].subject if self.questions else ""
-            )
+        unlearned_states = self.database.unlearned_question_states(
+            self.questions[0].subject if self.questions else ""
         )
         for question in self.questions:
-            if question.id not in learning_ids:
+            card_state = unlearned_states.get(question.id)
+            if card_state is None:
                 continue
             result.setdefault(question.category, []).append(
                 LearningQuestionReview(
@@ -44,6 +43,7 @@ class AdaptiveReviewService:
                     correct_answer=normalize_answer(
                         self.answers.get(question.relative_path, "")
                     ),
+                    card_state=card_state,
                 )
             )
         return result

@@ -522,6 +522,57 @@ def test_adaptive_review_service_lists_all_learning_questions_in_file_order(
     database.close()
 
 
+def test_adaptive_review_includes_newly_synced_question_once_until_known(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "DATA"
+    initial_subject = make_questions(data_dir, 1)
+    database = Database(tmp_path / "new-question-review.sqlite3")
+    database.sync_questions(initial_subject.questions, [initial_subject.name])
+    database.rate_card(initial_subject.questions[0].id, known=True)
+
+    make_image(data_dir / initial_subject.name / "Selections_1_choose" / "Câu 2.png")
+    updated_subject = DataScannerService(data_dir).scan()[0]
+    database.sync_questions(updated_subject.questions, [updated_subject.name])
+    database.sync_questions(updated_subject.questions, [updated_subject.name])
+    answers = {question.relative_path: "A" for question in updated_subject.questions}
+
+    grouped = AdaptiveReviewService(
+        database, updated_subject.questions, answers
+    ).learning_by_category()
+    new_question = next(
+        question
+        for question in updated_subject.questions
+        if question.id != initial_subject.questions[0].id
+    )
+    entries = grouped["Selections_1_choose"]
+    assert [entry.question.id for entry in entries] == [new_question.id]
+    assert entries[0].card_state == "new"
+    assert database.card_stats(updated_subject.name) == {
+        "new": 1,
+        "known": 1,
+        "learning": 0,
+    }
+
+    database.rate_card(new_question.id, known=False)
+    learning_entries = AdaptiveReviewService(
+        database, updated_subject.questions, answers
+    ).learning_by_category()["Selections_1_choose"]
+    assert [entry.question.id for entry in learning_entries] == [new_question.id]
+    assert learning_entries[0].card_state == "learning"
+
+    database.rate_card(new_question.id, known=True)
+    assert not AdaptiveReviewService(
+        database, updated_subject.questions, answers
+    ).learning_by_category()["Selections_1_choose"]
+    assert database.card_stats(updated_subject.name) == {
+        "new": 0,
+        "known": 2,
+        "learning": 0,
+    }
+    database.close()
+
+
 def test_exam_rejects_count_over_valid_pool(tmp_path: Path) -> None:
     subject = make_questions(tmp_path / "DATA", 2)
     database = Database(tmp_path / "progress.sqlite3")

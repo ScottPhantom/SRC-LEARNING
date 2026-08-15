@@ -826,6 +826,22 @@ class Database:
         ).fetchall()
         return [str(row["question_id"]) for row in rows]
 
+    def unlearned_question_states(self, subject: str) -> dict[str, str]:
+        """Return every active card that has not been marked as known.
+
+        A newly synchronized question intentionally has no ``card_progress`` row.
+        Treating that absence as ``new`` keeps synchronization idempotent while
+        still making the card immediately available to the subject dashboard.
+        """
+        rows = self._connection.execute(
+            """SELECT q.id question_id, COALESCE(p.state,'new') card_state
+            FROM questions q LEFT JOIN card_progress p ON p.question_id=q.id
+            WHERE q.subject=? AND q.active=1
+              AND COALESCE(p.state,'new') IN ('new','learning')""",
+            (subject,),
+        ).fetchall()
+        return {str(row["question_id"]): str(row["card_state"]) for row in rows}
+
     def card_stats(self, subject: str) -> dict[str, int]:
         result = {"new": 0, "known": 0, "learning": 0}
         rows = self._connection.execute(

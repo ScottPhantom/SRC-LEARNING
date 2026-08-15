@@ -94,6 +94,7 @@ class QuestionErrorStat:
 class LearningQuestionReview:
     question: Question
     correct_answer: str
+    card_state: str = "learning"
 
 
 @dataclass(slots=True, frozen=True)
