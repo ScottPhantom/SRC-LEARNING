@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import os
 from pathlib import Path
 
@@ -47,6 +48,7 @@ from app.ui.screens import (
     ResultScreen,
     SettingsScreen,
 )
+from app.ui.subject_dashboard import QuestionBankNotificationDialog
 from app.ui.themes import DARK_STYLE, LIGHT_STYLE, ThemeManager
 
 QT_APP = QApplication.instance() or QApplication([])
@@ -60,7 +62,9 @@ def make_subject(root: Path, amount: int = 2):
     return DataScannerService(root / "DATA").scan()[0]
 
 
-def test_question_viewer_crops_answer_band_and_never_restores_it(tmp_path: Path) -> None:
+def test_question_viewer_crops_answer_band_and_never_restores_it(
+    tmp_path: Path,
+) -> None:
     subject = make_subject(tmp_path, 1)
     viewer = QuestionImageViewer()
     viewer.set_crop_region((0.0, 0.9, 0.25, 0.1))
@@ -88,8 +92,7 @@ def test_question_viewer_zoom_is_bounded_and_reset_fits(tmp_path: Path) -> None:
     assert viewer.zoom_level == 0
     assert viewer.toolbar.isVisibleTo(viewer)
     assert all(
-        shortcut.context() == Qt.WindowShortcut
-        for shortcut in viewer.zoom_in_shortcuts
+        shortcut.context() == Qt.WindowShortcut for shortcut in viewer.zoom_in_shortcuts
     )
     assert viewer.zoom_out_shortcut.context() == Qt.WindowShortcut
     assert viewer.copy_shortcut.context() == Qt.WindowShortcut
@@ -347,7 +350,9 @@ def test_result_table_has_total_pass_status_and_drives_image_review(
     assert result.status == "PASS"
     assert screen.table.rowCount() == 3
     assert screen.table.columnCount() == 3
-    assert [screen.table.horizontalHeaderItem(column).text() for column in range(3)] == [
+    assert [
+        screen.table.horizontalHeaderItem(column).text() for column in range(3)
+    ] == [
         "NO",
         "Correct answer",
         "Điểm",
@@ -491,9 +496,7 @@ def test_subject_view_cards_dashboard_and_quick_review(tmp_path: Path) -> None:
     assert table.item(0, 2).foreground().color() == QColor("#FF453A")
 
     card = screen.mode_cards["flash"]
-    other_cards = [
-        screen.mode_cards[mode] for mode in ("cram", "exam")
-    ]
+    other_cards = [screen.mode_cards[mode] for mode in ("cram", "exam")]
     QApplication.sendEvent(card, QEvent(QEvent.Enter))
     QTest.qWait(280)
     assert card.property("hovered") is True
@@ -625,9 +628,10 @@ def test_learning_dashboard_rates_cards_and_updates_progress_directly(
     QT_APP.processEvents()
 
     assert table.columnCount() == 2
-    assert [
-        table.horizontalHeaderItem(index).text() for index in range(2)
-    ] == ["Câu hỏi", "Trạng thái"]
+    assert [table.horizontalHeaderItem(index).text() for index in range(2)] == [
+        "Câu hỏi",
+        "Trạng thái",
+    ]
     assert [table.item(row, 0).text() for row in range(table.rowCount())] == [
         question.absolute_path.name for question in subject.questions
     ]
@@ -663,6 +667,315 @@ def test_learning_dashboard_rates_cards_and_updates_progress_directly(
     dialog.close()
     screen.close()
     database.close()
+
+
+def test_subject_dashboard_refreshes_after_new_question_bank_item(
+    tmp_path: Path, monkeypatch
+) -> None:
+    subject = make_subject(tmp_path, 1)
+    answers_path = subject.path / "answers.csv"
+    with answers_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerow([subject.questions[0].relative_path, "A"])
+
+    database = Database(tmp_path / "dashboard-refresh.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    window.watcher.blockSignals(True)
+    window.show_modes(subject.name)
+    old_page = window._dynamic_page
+    assert isinstance(old_page, ModeScreen)
+    assert old_page.learning_tables["Selections_1_choose"].rowCount() == 1
+
+    new_image = subject.path / "Selections_1_choose" / "Câu 1.png"
+    Image.new("RGB", (1000, 500), "white").save(new_image)
+    with (subject.path / "answers.pending.csv").open(
+        "w", encoding="utf-8-sig", newline=""
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerow(["Selections_1_choose/Câu 1.png", "B"])
+
+    updated_subject = DataScannerService(tmp_path / "DATA").scan()[0]
+    monkeypatch.setattr(window, "_show_pending_bank_notification", lambda *_args: None)
+    window._apply_subjects([updated_subject])
+    QT_APP.processEvents()
+
+    refreshed_page = window._dynamic_page
+    assert isinstance(refreshed_page, ModeScreen)
+    assert refreshed_page is not old_page
+    assert window.answer_reports[subject.name].valid_count == 2
+    table = refreshed_page.learning_tables["Selections_1_choose"]
+    displayed_names = [table.item(row, 0).text() for row in range(table.rowCount())]
+    assert displayed_names == ["Câu 0.png", "Câu 1.png"]
+    assert displayed_names.count("Câu 1.png") == 1
+    added_question = next(
+        question
+        for question in updated_subject.questions
+        if question.relative_path == "Selections_1_choose/Câu 1.png"
+    )
+    assert database.card_stats(subject.name) == {
+        "new": 2,
+        "known": 0,
+        "learning": 0,
+    }
+
+    refreshed_page._handle_learning_rating(added_question.id, known=False)
+    assert database.card_stats(subject.name) == {
+        "new": 1,
+        "known": 0,
+        "learning": 1,
+    }
+    assert table.rowCount() == 2
+
+    refreshed_page._handle_learning_rating(added_question.id, known=True)
+    assert database.card_stats(subject.name) == {
+        "new": 1,
+        "known": 1,
+        "learning": 0,
+    }
+    assert [table.item(row, 0).text() for row in range(table.rowCount())] == [
+        "Câu 0.png"
+    ]
+
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    window.deleteLater()
+    QT_APP.processEvents()
+    database.close()
+
+
+def test_question_bank_notification_dialog_requires_every_slide_and_handles_delete(
+    tmp_path: Path,
+) -> None:
+    subject = make_subject(tmp_path, 2)
+    items = [
+        {
+            "item_index": 0,
+            "change_type": "ADD",
+            "logical_id": "add",
+            "question_id": subject.questions[0].id,
+            "old_path": None,
+            "new_path": subject.questions[0].relative_path,
+            "old_category": None,
+            "new_category": "True_False",
+            "old_answer": "",
+            "new_answer": "B",
+            "reason": "new-path",
+            "viewed_at": None,
+        },
+        {
+            "item_index": 1,
+            "change_type": "UPDATE",
+            "logical_id": "update",
+            "question_id": subject.questions[1].id,
+            "old_path": "Selections_1_choose/Câu 186.png",
+            "new_path": subject.questions[1].relative_path,
+            "old_category": "Selections_1_choose",
+            "new_category": "Selections_Multiple_choose",
+            "old_answer": "A",
+            "new_answer": "AD",
+            "reason": "category-changed+answer-changed",
+            "viewed_at": None,
+        },
+        {
+            "item_index": 2,
+            "change_type": "DELETE",
+            "logical_id": "delete",
+            "question_id": "deleted-question",
+            "old_path": "True_False/Câu 120.png",
+            "new_path": None,
+            "old_category": "True_False",
+            "new_category": None,
+            "old_answer": "B",
+            "new_answer": "",
+            "reason": "missing-from-data",
+            "viewed_at": None,
+        },
+    ]
+    dialog = QuestionBankNotificationDialog(
+        subject.name,
+        subject.path,
+        2,
+        items,
+        (0.0, 0.9, 0.25, 0.1),
+    )
+    viewed: list[int] = []
+    dialog.item_viewed.connect(viewed.append)
+    ThemeManager(QT_APP).apply("light")
+    dialog.show()
+    QT_APP.processEvents()
+
+    assert dialog.isModal()
+    assert dialog.windowModality() == Qt.ApplicationModal
+    assert not dialog.windowFlags() & Qt.WindowCloseButtonHint
+    assert dialog.position_label.text() == "Thay đổi 1/3"
+    assert dialog.change_badge.text() == "ADD"
+    assert dialog.title_label.text().startswith("Đã bổ sung Câu")
+    assert dialog.answer_label.text() == "B"
+    assert viewed == [0]
+    assert not dialog.finish_button.isVisible()
+    assert dialog.previous_button.accessibleName()
+    assert dialog.next_button.accessibleName()
+    assert not dialog.previous_button.isEnabled()
+    assert dialog.next_button.isEnabled()
+
+    QTest.keyClick(dialog, Qt.Key_Escape)
+    QTest.keyClick(dialog, Qt.Key_Space)
+    QTest.keyClick(dialog, Qt.Key_Return)
+    dialog.close()
+    QT_APP.processEvents()
+    assert dialog.isVisible()
+    assert dialog.current_index == 0
+
+    # Arrow navigation must work with focus inside the image viewer, not only
+    # when the QDialog itself owns focus. Boundary keys keep the current slide.
+    dialog.viewer.setFocus()
+    QTest.keyClick(dialog.viewer, Qt.Key_Left)
+    assert dialog.current_index == 0
+    QTest.keyClick(dialog.viewer, Qt.Key_Right)
+    assert dialog.current_index == 1
+    assert dialog.change_badge.text() == "UPDATE"
+    assert dialog.detail_label.text() == "Đáp án “A” → “A D”"
+    assert dialog.content_stack.currentWidget() is dialog.viewer
+    assert not dialog.finish_button.isVisible()
+    assert dialog.previous_button.isEnabled()
+    assert dialog.next_button.isEnabled()
+
+    # The shortcut also remains active while a child button has focus.
+    dialog.next_button.setFocus()
+    QTest.keyClick(dialog.next_button, Qt.Key_Left)
+    assert dialog.current_index == 0
+    QTest.keyClick(dialog.next_button, Qt.Key_Right)
+    assert dialog.current_index == 1
+    QTest.keyClick(dialog.next_button, Qt.Key_Right)
+    assert dialog.current_index == 2
+    assert dialog.change_badge.text() == "DELETE"
+    assert dialog.title_label.text() == "Câu 120 đã ngừng sử dụng"
+    assert dialog.content_stack.currentWidget() is dialog.missing_frame
+    assert "True_False/Câu 120.png" in dialog.missing_metadata.text()
+    assert dialog.finish_button.isVisible() and dialog.finish_button.isEnabled()
+    assert viewed == [0, 1, 2]
+    assert dialog.previous_button.isEnabled()
+    assert not dialog.next_button.isEnabled()
+    QTest.keyClick(dialog.finish_button, Qt.Key_Right)
+    assert dialog.current_index == 2
+    QTest.keyClick(dialog.finish_button, Qt.Key_Left)
+    assert dialog.current_index == 1
+    QTest.keyClick(dialog.finish_button, Qt.Key_Right)
+    assert dialog.current_index == 2
+
+    assert not dialog.grab().isNull()
+    ThemeManager(QT_APP).apply("dark")
+    QT_APP.processEvents()
+    assert not dialog.grab().isNull()
+    dialog.completion_requested.connect(dialog.complete_and_close)
+    QTest.mouseClick(dialog.finish_button, Qt.LeftButton)
+    QT_APP.processEvents()
+    assert not dialog.isVisible()
+    ThemeManager(QT_APP).apply("light")
+    dialog.deleteLater()
+
+
+def test_question_bank_notification_opens_only_for_selected_subject_and_persists(
+    tmp_path: Path,
+) -> None:
+    first_subject = make_subject(tmp_path, 2)
+    other_image = tmp_path / "DATA" / "OTHER101" / "Selections_1_choose" / "Câu 1.png"
+    other_image.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1000, 500), "white").save(other_image)
+    subjects = DataScannerService(tmp_path / "DATA").scan()
+    database_path = tmp_path / "notification-controller.sqlite3"
+    database = Database(database_path)
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    database.sync_questions(
+        [question for subject in subjects for question in subject.questions],
+        [subject.name for subject in subjects],
+    )
+    database.apply_question_bank_update(
+        subject=first_subject.name,
+        bank_version=2,
+        revisions=[],
+        updates=[],
+        question_count=first_subject.question_count,
+        added_count=1,
+        deleted_count=0,
+        notification_changes=[
+            {
+                "change_type": "ADD",
+                "logical_id": first_subject.questions[0].id,
+                "question_id": first_subject.questions[0].id,
+                "old_path": None,
+                "new_path": first_subject.questions[0].relative_path,
+                "old_category": None,
+                "new_category": first_subject.questions[0].category,
+                "old_answer": "",
+                "new_answer": "A",
+                "reason": "new-path",
+            },
+            {
+                "change_type": "UPDATE",
+                "logical_id": first_subject.questions[1].id,
+                "question_id": first_subject.questions[1].id,
+                "old_path": first_subject.questions[1].relative_path,
+                "new_path": first_subject.questions[1].relative_path,
+                "old_category": first_subject.questions[1].category,
+                "new_category": first_subject.questions[1].category,
+                "old_answer": "B",
+                "new_answer": "A",
+                "reason": "answer-changed",
+            },
+        ],
+    )
+
+    window = MainWindow(database)
+    window.show()
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert window.stack.currentWidget() is window.home
+    assert window._bank_update_dialog is None
+
+    window.show_modes("OTHER101")
+    QT_APP.processEvents()
+    assert window._bank_update_dialog is None
+
+    window.show_modes(first_subject.name)
+    QT_APP.processEvents()
+    dialog = window._bank_update_dialog
+    assert isinstance(dialog, QuestionBankNotificationDialog)
+    assert dialog.subject == first_subject.name
+    assert dialog.isVisible() and dialog.isModal()
+    assert not dialog.finish_button.isVisible()
+
+    QTest.keyClick(dialog, Qt.Key_Right)
+    assert dialog.finish_button.isVisible()
+    QTest.mouseClick(dialog.finish_button, Qt.LeftButton)
+    QT_APP.processEvents()
+    assert database.pending_question_bank_notification(first_subject.name) is None
+    assert window._bank_update_dialog is None
+
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    window.deleteLater()
+    database.close()
+
+    reopened = Database(database_path)
+    reopened.set_setting("data_dir", str(tmp_path / "DATA"))
+    restarted_window = MainWindow(reopened)
+    restarted_window.show()
+    restarted_window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert restarted_window._bank_update_dialog is None
+    restarted_window.show_modes(first_subject.name)
+    QT_APP.processEvents()
+    assert restarted_window._bank_update_dialog is None
+    restarted_window.close()
+    restarted_window.thread_pool.waitForDone(2000)
+    restarted_window.deleteLater()
+    reopened.close()
 
 
 def test_main_window_fades_between_subject_and_study_screens(tmp_path: Path) -> None:
@@ -929,7 +1242,9 @@ def test_cramming_enter_grades_queue_and_history_is_read_only(tmp_path: Path) ->
     # Left skips the result currently on screen and opens the actual previous entry.
     screen._previous_question()
     assert screen._history_cursor == len(screen.history_stack) - 2
-    assert all(not widget.isEnabled() for widget in screen.answer_options.option_widgets)
+    assert all(
+        not widget.isEnabled() for widget in screen.answer_options.option_widgets
+    )
     assert "Chỉ xem" in screen.history_notice.text()
     screen._next_question()
     assert screen._history_cursor == len(screen.history_stack) - 1
@@ -995,7 +1310,9 @@ def test_global_home_handles_cancel_discard_and_submit_active_exam(
         "No — Thoát và Không lưu",
     }
     window.current_subject = subject
-    first_session = ExamService(database, subject.questions, answers).create_session(config)
+    first_session = ExamService(database, subject.questions, answers).create_session(
+        config
+    )
     window.start_exam(first_session)
     exam_page = window.active_exam_screen
     assert exam_page is not None and exam_page.active
@@ -1016,7 +1333,9 @@ def test_global_home_handles_cancel_discard_and_submit_active_exam(
     assert not database.exam_history()
 
     window.current_subject = subject
-    second_session = ExamService(database, subject.questions, answers).create_session(config)
+    second_session = ExamService(database, subject.questions, answers).create_session(
+        config
+    )
     second_session.set_answer("A")
     window.start_exam(second_session)
     monkeypatch.setattr(window, "_ask_active_exam_exit", lambda: "submit")
@@ -1071,11 +1390,15 @@ def test_history_screen_multi_selection_and_controller_delete_refresh(
     assert page.delete_button.isEnabled()
     assert page.selected_attempt_ids() == sorted(attempt_ids)
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Cancel)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Cancel
+    )
     QTest.mouseClick(page.delete_button, Qt.LeftButton)
     assert len(database.exam_history()) == 2
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes
+    )
     QTest.mouseClick(page.delete_button, Qt.LeftButton)
     refreshed = window._dynamic_page
     assert isinstance(refreshed, HistoryScreen)
@@ -1142,7 +1465,9 @@ def test_controller_retest_reuses_exact_config_or_returns_to_config(
     database.close()
 
 
-def test_cramming_right_arrow_requires_enter_and_does_not_mutate_queue(tmp_path: Path) -> None:
+def test_cramming_right_arrow_requires_enter_and_does_not_mutate_queue(
+    tmp_path: Path,
+) -> None:
     subject = make_subject(tmp_path, 2)
     database = Database(tmp_path / "cram-skip.sqlite3")
     database.sync_questions(subject.questions, [subject.name])
@@ -1201,13 +1526,7 @@ def test_segmented_progress_represents_completed_current_and_future_rounds() -> 
 def test_shared_answer_options_uses_checkboxes_for_multiple_choice(
     tmp_path: Path,
 ) -> None:
-    path = (
-        tmp_path
-        / "DATA"
-        / "GUI101"
-        / "Selections_Multiple_choose"
-        / "Câu nhiều.png"
-    )
+    path = tmp_path / "DATA" / "GUI101" / "Selections_Multiple_choose" / "Câu nhiều.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (1000, 500), "white").save(path)
     question = DataScannerService(tmp_path / "DATA").scan()[0].questions[0]
@@ -1356,6 +1675,7 @@ def test_home_screen_loading_and_subjects_states(tmp_path: Path) -> None:
 
 def test_subject_card_click_and_keyboard_signals(tmp_path: Path) -> None:
     from app.ui.subject_card import SubjectCard
+
     subject = make_subject(tmp_path, 2)
     card = SubjectCard(subject)
     card.show()
@@ -1381,6 +1701,7 @@ def test_app_header_actions_and_mode_toggle() -> None:
     from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
     from app.ui.screens import AppHeader
+
     win = QWidget()
     win.resize(600, 100)
     layout = QVBoxLayout(win)
@@ -1429,7 +1750,9 @@ def test_app_header_actions_and_mode_toggle() -> None:
     win.deleteLater()
 
 
-def test_history_tree_groups_subjects_formats_local_time_and_selects_only_exams() -> None:
+def test_history_tree_groups_subjects_formats_local_time_and_selects_only_exams() -> (
+    None
+):
     from app.ui.screens import HistoryScreen
 
     history = [
@@ -1506,6 +1829,7 @@ def test_theme_switch_applies_and_repaints(tmp_path: Path) -> None:
 
 def test_home_grid_reflow_preserves_card_instances(tmp_path: Path) -> None:
     from app.ui.screens import HomeScreen
+
     subject1 = make_subject(tmp_path, 2)
     subject1.name = "MATH"
     subject2 = make_subject(tmp_path, 3)
@@ -1555,9 +1879,7 @@ def test_toolbar_icon_size_alignment_and_reload_pixels() -> None:
     # Kiểm tra 4 góc phần tư có ít nhất 1 pixel không trong suốt
     w, h = image.width(), image.height()
     quad1 = any(
-        image.pixelColor(x, y).alpha() > 0
-        for x in range(w // 2)
-        for y in range(h // 2)
+        image.pixelColor(x, y).alpha() > 0 for x in range(w // 2) for y in range(h // 2)
     )
     quad2 = any(
         image.pixelColor(x, y).alpha() > 0
@@ -1575,7 +1897,9 @@ def test_toolbar_icon_size_alignment_and_reload_pixels() -> None:
         for y in range(h // 2, h)
     )
 
-    assert quad1 and quad2 and quad3 and quad4, "Reload icon phải vẽ dạng vòng tròn phủ cả 4 góc phần tư"
+    assert quad1 and quad2 and quad3 and quad4, (
+        "Reload icon phải vẽ dạng vòng tròn phủ cả 4 góc phần tư"
+    )
     header.deleteLater()
 
 
@@ -1684,7 +2008,9 @@ def test_light_home_background_asset_and_variant_rendering() -> None:
         bg_mod._HOME_LIGHT_PIXMAP = None
         bg_mod._HOME_LIGHT_LOADED = True  # Giả lập không có pixmap
         painter = QPainter(img)
-        paint_app_background(painter, QRectF(0, 0, 800, 600), dark=False, variant="home")
+        paint_app_background(
+            painter, QRectF(0, 0, 800, 600), dark=False, variant="home"
+        )
         painter.end()
     finally:
         bg_mod._HOME_LIGHT_PIXMAP = orig_pixmap
@@ -1695,7 +2021,9 @@ def test_light_home_background_asset_and_variant_rendering() -> None:
     page.deleteLater()
 
 
-def test_glass_header_and_shell_continuous_background_navigation(tmp_path: Path) -> None:
+def test_glass_header_and_shell_continuous_background_navigation(
+    tmp_path: Path,
+) -> None:
     from app.controllers import MainWindow
     from app.repositories.database import Database
     from app.ui.background import AppShell

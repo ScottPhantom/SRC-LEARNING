@@ -881,22 +881,38 @@ class ModeScreen(BasePage):
 
     def _handle_learning_rating(self, question_id: str, known: bool) -> None:
         self.learning_status_changed.emit(question_id, known)
-        if not known:
-            return
         for table, entries in self._learning_entries_by_table.items():
-            remaining = [
-                entry for entry in entries if entry.question.id != question_id
-            ]
-            if len(remaining) == len(entries):
+            matched_index = next(
+                (
+                    index
+                    for index, entry in enumerate(entries)
+                    if entry.question.id == question_id
+                ),
+                None,
+            )
+            if matched_index is None:
                 continue
-            entries[:] = remaining
+            review = entries[matched_index]
+            previous_state = review.card_state
+            if not known:
+                if previous_state == "new":
+                    entries[matched_index] = LearningQuestionReview(
+                        question=review.question,
+                        correct_answer=review.correct_answer,
+                        card_state="learning",
+                    )
+                    self.card_stats["new"] = max(0, self.card_stats.get("new", 0) - 1)
+                    self.card_stats["learning"] = self.card_stats.get("learning", 0) + 1
+                    self._update_progress_summary()
+                return
+            del entries[matched_index]
             self._render_learning_table(table)
-            self.card_stats["learning"] = max(
-                0, self.card_stats.get("learning", 0) - 1
+            self.card_stats[previous_state] = max(
+                0, self.card_stats.get(previous_state, 0) - 1
             )
             self.card_stats["known"] = self.card_stats.get("known", 0) + 1
             self._update_progress_summary()
-            break
+            return
 
 
 @dataclass(slots=True)

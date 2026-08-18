@@ -29,6 +29,11 @@ from app.repositories.answer_key import AnswerKeyReport, AnswerKeyRepository
 from app.repositories.database import Database
 from app.services.adaptive import AdaptiveReviewService
 from app.services.exam import ExamResult, ExamService, ExamSession
+from app.services.question_bank_updates import (
+    PENDING_ANSWERS_FILE,
+    BankUpdateResult,
+    QuestionBankUpdateChecker,
+)
 from app.services.study import CrammingService, FlashcardService
 from app.ui.background import AppShell
 from app.ui.screens import (
@@ -43,6 +48,7 @@ from app.ui.screens import (
     ResultScreen,
     SettingsScreen,
 )
+from app.ui.subject_dashboard import QuestionBankNotificationDialog
 from app.ui.themes import ThemeManager
 
 LOGGER = logging.getLogger(__name__)
@@ -102,6 +108,7 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self._scan_running = False
         self._rescan_requested = False
+        self._bank_update_dialog: QuestionBankNotificationDialog | None = None
         self.theme_manager = ThemeManager(QApplication.instance())
         self._apply_theme(self.settings.theme)
         self.refresh_data()
@@ -191,13 +198,9 @@ class MainWindow(QMainWindow):
         dialog.setObjectName("activeExamExitDialog")
         dialog.setWindowTitle("Rời bài thi")
         dialog.setIcon(QMessageBox.Warning)
-        dialog.setText(
-            "Bài thi đang làm sẽ không được lưu. Bạn muốn xử lý thế nào?"
-        )
+        dialog.setText("Bài thi đang làm sẽ không được lưu. Bạn muốn xử lý thế nào?")
         cancel_button = dialog.addButton("Cancel", QMessageBox.RejectRole)
-        submit_button = dialog.addButton(
-            "Yes — Nộp và Thoát", QMessageBox.AcceptRole
-        )
+        submit_button = dialog.addButton("Yes — Nộp và Thoát", QMessageBox.AcceptRole)
         discard_button = dialog.addButton(
             "No — Thoát và Không lưu", QMessageBox.DestructiveRole
         )
@@ -260,16 +263,45 @@ class MainWindow(QMainWindow):
             self.refresh_data()
 
     def _apply_subjects(self, subjects: list[Subject]) -> None:
+        selected_subject_name = (
+            self.current_subject.name if self.current_subject is not None else None
+        )
+        refresh_subject_dashboard = isinstance(self._dynamic_page, ModeScreen)
         self.subjects = {subject.name: subject for subject in subjects}
-        all_questions = [question for subject in subjects for question in subject.questions]
-        self.database.sync_questions(all_questions, [subject.name for subject in subjects])
+        all_questions = [
+            question for subject in subjects for question in subject.questions
+        ]
+        self.database.sync_questions(
+            all_questions, [subject.name for subject in subjects]
+        )
+        bank_results = QuestionBankUpdateChecker(
+            self.database, self.settings.crop_region
+        ).check(subjects, apply=True)
         answer_repository = AnswerKeyRepository()
         self.answer_reports = {
             subject.name: answer_repository.load(subject.path, subject.questions)
             for subject in subjects
         }
         self.home.set_subjects(subjects, self.data_dir)
+        self._report_bank_update_errors(bank_results)
         self._reset_watch_paths(subjects)
+        if selected_subject_name is not None:
+            self.current_subject = self.subjects.get(selected_subject_name)
+        if refresh_subject_dashboard and self.current_subject is not None:
+            # ModeScreen owns a snapshot of the dashboard rows. Rebuild it after
+            # a successful scan so newly synchronized questions are visible now,
+            # without requiring the user to leave and re-enter the subject.
+            self.show_modes(self.current_subject.name)
+
+    def _report_bank_update_errors(self, results: list[BankUpdateResult]) -> None:
+        errors = [
+            f"{result.subject}: " + "; ".join(result.errors)
+            for result in results
+            if getattr(result, "errors", None)
+        ]
+        if errors:
+            LOGGER.warning("Question bank update chưa hoàn tất: %s", " | ".join(errors))
+            self.home.notice.setText("Lỗi cập nhật đáp án: " + " | ".join(errors))
 
     def _reset_watch_paths(self, subjects: list[Subject]) -> None:
         old_paths = self.watcher.directories() + self.watcher.files()
@@ -284,6 +316,9 @@ class MainWindow(QMainWindow):
             csv_path = subject.path / AnswerKeyRepository.FILE_NAME
             if csv_path.exists():
                 paths.append(str(csv_path))
+            pending_path = subject.path / PENDING_ANSWERS_FILE
+            if pending_path.exists():
+                paths.append(str(pending_path))
         if paths:
             missing = self.watcher.addPaths(paths)
             if missing:
@@ -295,7 +330,9 @@ class MainWindow(QMainWindow):
     def show_modes(self, subject_name: str) -> None:
         subject = self.subjects.get(subject_name)
         if subject is None:
-            QMessageBox.warning(self, "Môn học không tồn tại", "Hãy bấm Làm mới và thử lại.")
+            QMessageBox.warning(
+                self, "Môn học không tồn tại", "Hãy bấm Làm mới và thử lại."
+            )
             return
         self.current_subject = subject
         report = self.answer_reports[subject.name]
@@ -316,6 +353,88 @@ class MainWindow(QMainWindow):
         page.mode_selected.connect(self._open_mode)
         page.learning_status_changed.connect(self.database.rate_card)
         self._set_dynamic_page(page)
+        QTimer.singleShot(
+            0,
+            lambda selected=subject.name, current_page=page: (
+                self._show_pending_bank_notification(selected, current_page)
+            ),
+        )
+
+    def _show_pending_bank_notification(
+        self, subject_name: str, subject_page: ModeScreen
+    ) -> None:
+        if (
+            self.current_subject is None
+            or self.current_subject.name != subject_name
+            or self.stack.currentWidget() is not subject_page
+            or self._bank_update_dialog is not None
+        ):
+            return
+        pending = self.database.pending_question_bank_notification(subject_name)
+        if pending is None:
+            return
+        bank_version, items = pending
+        subject = self.subjects.get(subject_name)
+        if subject is None:
+            return
+        dialog = QuestionBankNotificationDialog(
+            subject_name,
+            subject.path,
+            bank_version,
+            items,
+            self.settings.crop_region,
+            parent=self,
+        )
+        dialog.item_viewed.connect(
+            lambda item_index, selected=subject_name, version=bank_version: (
+                self.database.mark_question_bank_notification_item_viewed(
+                    selected, version, item_index
+                )
+            )
+        )
+        dialog.completion_requested.connect(
+            lambda selected=subject_name, version=bank_version, current=dialog: (
+                self._complete_bank_notification(selected, version, current)
+            )
+        )
+
+        def clear_dialog(_result: int) -> None:
+            if self._bank_update_dialog is dialog:
+                self._bank_update_dialog = None
+            dialog.deleteLater()
+            QTimer.singleShot(
+                0,
+                lambda selected=subject_name, current_page=subject_page: (
+                    self._show_pending_bank_notification(selected, current_page)
+                ),
+            )
+
+        dialog.finished.connect(clear_dialog)
+        self._bank_update_dialog = dialog
+        dialog.open()
+
+    def _complete_bank_notification(
+        self,
+        subject: str,
+        bank_version: int,
+        dialog: QuestionBankNotificationDialog,
+    ) -> None:
+        try:
+            completed = self.database.complete_question_bank_notification(
+                subject, bank_version
+            )
+        except Exception as exc:  # Keep the mandatory modal open on persistence errors.
+            LOGGER.exception(
+                "Không thể hoàn tất Question Bank Notification %s v%d",
+                subject,
+                bank_version,
+            )
+            dialog.show_completion_error(f"Không thể lưu trạng thái đã xem: {exc}")
+            return
+        if completed:
+            dialog.complete_and_close()
+        else:
+            dialog.show_completion_error("Hãy xem tất cả thay đổi trước khi hoàn tất.")
 
     def _open_mode(self, mode: str) -> None:
         if self.current_subject is None or self._transition_in_progress:
@@ -352,13 +471,17 @@ class MainWindow(QMainWindow):
         if self.current_subject is None:
             raise RuntimeError("Chưa chọn môn học")
         report = self.answer_reports[self.current_subject.name]
-        return ExamService(self.database, self.current_subject.questions, report.answers)
+        return ExamService(
+            self.database, self.current_subject.questions, report.answers
+        )
 
     def show_exam_config(self, animate: bool = False) -> None:
         if self.current_subject is None:
             return
         subject = self.current_subject
-        page = ExamConfigScreen(subject, self._exam_service(), self.answer_reports[subject.name])
+        page = ExamConfigScreen(
+            subject, self._exam_service(), self.answer_reports[subject.name]
+        )
         page.back_requested.connect(lambda: self.show_modes(subject.name))
         page.exam_requested.connect(self.start_exam)
         self._set_dynamic_page(page, animate=animate)
@@ -418,7 +541,9 @@ class MainWindow(QMainWindow):
             self.app_header.update_theme()
         if hasattr(self, "home"):
             self.home.update_theme()
-        if self._dynamic_page is not None and hasattr(self._dynamic_page, "update_theme"):
+        if self._dynamic_page is not None and hasattr(
+            self._dynamic_page, "update_theme"
+        ):
             self._dynamic_page.update_theme()
 
     def show_settings(self) -> None:
@@ -491,7 +616,9 @@ class MainWindow(QMainWindow):
                 if files:
                     self.watcher.removePaths(files)
             except RuntimeError as exc:
-                LOGGER.debug("File watcher was already disposed during shutdown: %s", exc)
+                LOGGER.debug(
+                    "File watcher was already disposed during shutdown: %s", exc
+                )
         if hasattr(self, "thread_pool"):
             self.thread_pool.clear()
             self.thread_pool.waitForDone(1500)

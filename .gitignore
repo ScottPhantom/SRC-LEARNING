@@ -39,10 +39,14 @@ secrets*
 *.parquet
 
 # Mock Exam reports generated from local database statistics.
-docs/*/Date-of-Statistical_*/
+**/docs/*/Date-of-Statistical_*/
 
 build/
 dist/
 ocr_failures/
 .vscode
-.antigravity-ide
+
+# Local AI agent and agentic IDE state must never be published.
+**/.agents/
+**/.antigravity/
+**/.antigravity-ide/

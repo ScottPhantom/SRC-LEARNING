@@ -6,6 +6,7 @@ import argparse
 import csv
 import sys
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -13,7 +14,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import cv2
-import numpy as np
 import pytesseract
 
 from app.config import MULTIPLE_CATEGORY
@@ -22,69 +22,32 @@ from app.repositories.answer_key import (
     AnswerKeyRepository,
     normalize_relative_path,
 )
+from app.services.answer_ocr import (
+    crop_answer,
+    read_image_unicode,
+    recognize,
+)
 from app.services.data_scanner import DataScannerService
+from app.services.question_bank_updates import (
+    ACTIVE_MANIFEST,
+    PENDING_ANSWERS_FILE,
+    VERSION_DIRECTORY,
+)
 
 
 def parse_region(value: str) -> tuple[float, float, float, float]:
     try:
         values = tuple(float(part.strip()) for part in value.split(","))
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("Region phải gồm bốn số x,y,width,height") from exc
+        raise argparse.ArgumentTypeError(
+            "Region phải gồm bốn số x,y,width,height"
+        ) from exc
     if len(values) != 4:
         raise argparse.ArgumentTypeError("Region phải gồm bốn số x,y,width,height")
     x, y, width, height = values
     if min(values) < 0 or x + width > 1 or y + height > 1 or width <= 0 or height <= 0:
         raise argparse.ArgumentTypeError("Region phải nằm trong khoảng 0..1 của ảnh")
     return x, y, width, height
-
-
-def read_image_unicode(path: Path) -> np.ndarray:
-    data = np.fromfile(str(path), dtype=np.uint8)
-    image = cv2.imdecode(data, cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError("OpenCV không đọc được ảnh")
-    return image
-
-
-def crop_answer(
-    image: np.ndarray, region: tuple[float, float, float, float]
-) -> np.ndarray:
-    height, width = image.shape[:2]
-    x, y, crop_width, crop_height = region
-    x1, y1 = int(width * x), int(height * y)
-    x2, y2 = max(x1 + 1, int(width * (x + crop_width))), max(
-        y1 + 1, int(height * (y + crop_height))
-    )
-    return image[y1:y2, x1:x2]
-
-
-def preprocess(crop: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    return cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-
-
-def recognize(crop: np.ndarray, multiple: bool) -> str:
-    """Nhận diện đáp án bằng nhiều biến thể, ưu tiên ảnh crop còn nguyên nét.
-
-    Một số ảnh dùng chữ rất mảnh nên threshold Otsu có thể xóa hoàn toàn ký tự.
-    Ngoài ra dữ liệu thực tế có cả chữ thường (ví dụ ``d``), vì vậy whitelist phải
-    chứa cả hai kiểu chữ trước khi ``normalize_answer`` chuẩn hóa về A-D.
-    """
-
-    candidates = (crop, preprocess(crop))
-    expected_lengths = range(2, 9) if multiple else (1,)
-    for candidate in candidates:
-        for psm in (7, 6, 10):
-            raw = pytesseract.image_to_string(
-                candidate,
-                config=f"--psm {psm} -c tessedit_char_whitelist=ABCDEFGHabcdefgh",
-            )
-            answer = normalize_answer(raw)
-            if len(answer) in expected_lengths:
-                return answer
-    return ""
 
 
 def read_existing(path: Path) -> dict[str, str]:
@@ -112,13 +75,102 @@ def write_csv(path: Path, rows: list[tuple[str, str]]) -> None:
     temporary.replace(path)
 
 
+def answer_output_path(subject_path: Path) -> Path:
+    """Never replace an active versioned bank with an unreviewed OCR result."""
+
+    manifest = subject_path / VERSION_DIRECTORY / ACTIVE_MANIFEST
+    if manifest.exists():
+        return subject_path / PENDING_ANSWERS_FILE
+    return subject_path / AnswerKeyRepository.FILE_NAME
+
+
+def normalized_rows(rows: list[tuple[str, str]]) -> dict[str, str]:
+    return {
+        normalize_relative_path(relative): normalize_answer(answer)
+        for relative, answer in rows
+        if normalize_relative_path(relative)
+    }
+
+
+def publish_answers(
+    subject_path: Path,
+    active_answers: dict[str, str],
+    rows: list[tuple[str, str]],
+) -> tuple[Path, str]:
+    """Write OCR output only when it differs from the active versioned bank."""
+
+    output_path = answer_output_path(subject_path)
+    candidate_answers = normalized_rows(rows)
+    normalized_active = {
+        normalize_relative_path(relative): normalize_answer(answer)
+        for relative, answer in active_answers.items()
+    }
+    if (
+        output_path.name == PENDING_ANSWERS_FILE
+        and candidate_answers == normalized_active
+    ):
+        output_path.unlink(missing_ok=True)
+        return output_path, "unchanged"
+    write_csv(output_path, rows)
+    return output_path, "written"
+
+
+def answer_rule(question) -> str:
+    if question.category == MULTIPLE_CATEGORY:
+        return "nhập 2–4 ký tự khác nhau trong A–D, ví dụ AD"
+    if question.category == "True_False":
+        return "nhập A hoặc B"
+    return "nhập một ký tự A, B, C hoặc D"
+
+
+def prompt_for_manual_answer(
+    question,
+    *,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
+) -> str:
+    """Ask a developer for one answer until it is valid or explicitly skipped."""
+
+    repository = AnswerKeyRepository()
+    output_func("")
+    output_func("MANUAL ANSWER REQUIRED")
+    output_func(f"  Môn học : {question.subject}")
+    output_func(f"  Câu hỏi : {question.relative_path}")
+    output_func(f"  Loại câu: {question.category}")
+    output_func(f"  Ảnh     : {question.absolute_path}")
+    output_func(f"  Quy tắc : {answer_rule(question)}")
+    output_func("  Gõ 'skip' để bỏ qua; bank version mới sẽ không được kích hoạt.")
+    while True:
+        try:
+            raw = input_func("Nhập đáp án đúng: ").strip()
+        except EOFError:
+            output_func(
+                "Không thể đọc stdin; câu hỏi được để lại để kiểm tra thủ công."
+            )
+            return ""
+        if raw.casefold() == "skip":
+            output_func("Đã bỏ qua câu hỏi này.")
+            return ""
+        answer = normalize_answer(raw)
+        if repository.validate(question, answer):
+            output_func(f"Đã nhận đáp án thủ công: {answer}")
+            return answer
+        output_func(f"Đáp án {raw!r} không hợp lệ; {answer_rule(question)}.")
+
+
 def process_subject(subject, args: argparse.Namespace) -> tuple[int, int]:
     repository = AnswerKeyRepository()
     csv_path = subject.path / repository.FILE_NAME
-    existing = read_existing(csv_path)
+    active_answers = read_existing(csv_path)
+    existing = dict(active_answers)
+    pending_path = subject.path / PENDING_ANSWERS_FILE
+    if pending_path.exists():
+        existing.update(read_existing(pending_path))
     output: list[tuple[str, str]] = []
     summary: Counter[str] = Counter()
-    failed_dir = Path(args.failed_crops).resolve() / subject.name if args.failed_crops else None
+    failed_dir = (
+        Path(args.failed_crops).resolve() / subject.name if args.failed_crops else None
+    )
 
     for question in subject.questions:
         relative = normalize_relative_path(question.relative_path)
@@ -135,10 +187,25 @@ def process_subject(subject, args: argparse.Namespace) -> tuple[int, int]:
             answer = recognize(crop, question.category == MULTIPLE_CATEGORY)
             if not repository.validate(question, answer):
                 answer = ""
-        except (OSError, ValueError, RuntimeError, cv2.error, pytesseract.TesseractError) as exc:
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            cv2.error,
+            pytesseract.TesseractError,
+        ) as exc:
             print(f"WARNING: {subject.name}/{relative}: {exc}", file=sys.stderr)
+        if (
+            not answer
+            and not getattr(args, "non_interactive", False)
+            and sys.stdin.isatty()
+        ):
+            answer = prompt_for_manual_answer(question)
         if answer:
-            summary["recognized"] += 1
+            if repository.validate(question, answer):
+                summary["resolved"] += 1
+            else:  # pragma: no cover - defensive guard around the prompt contract
+                answer = ""
         else:
             summary["failed"] += 1
             print(
@@ -148,21 +215,32 @@ def process_subject(subject, args: argparse.Namespace) -> tuple[int, int]:
             if failed_dir is not None and crop is not None:
                 destination = failed_dir / question.category
                 destination.mkdir(parents=True, exist_ok=True)
-                cv2.imencode(".png", crop)[1].tofile(str(destination / question.absolute_path.name))
+                cv2.imencode(".png", crop)[1].tofile(
+                    str(destination / question.absolute_path.name)
+                )
         output.append((relative, answer))
-    write_csv(csv_path, output)
+    output_path, publish_status = publish_answers(subject.path, active_answers, output)
+    if publish_status == "unchanged":
+        destination_message = (
+            f"không có thay đổi so với {csv_path}; không tạo {output_path.name}"
+        )
+    else:
+        destination_message = str(output_path)
     print(
-        f"{subject.name}: {summary['recognized']} OCR thành công, "
-        f"{summary['preserved']} giữ nguyên, {summary['failed']} cần điền thủ công -> {csv_path}"
+        f"{subject.name}: {summary['resolved']} OCR/thủ công thành công, "
+        f"{summary['preserved']} giữ nguyên, {summary['failed']} cần điền thủ công "
+        f"-> {destination_message}"
     )
-    return summary["recognized"] + summary["preserved"], summary["failed"]
+    return summary["resolved"] + summary["preserved"], summary["failed"]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", default="DATA", help="Thư mục dữ liệu")
     parser.add_argument("--subject", help="Chỉ xử lý một môn học")
-    parser.add_argument("--overwrite", action="store_true", help="OCR lại cả đáp án đã có")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="OCR lại cả đáp án đã có"
+    )
     parser.add_argument(
         "--region",
         type=parse_region,
@@ -172,6 +250,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--failed-crops",
         help="Thư mục tùy chọn để lưu vùng crop của các ảnh OCR thất bại",
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Không hỏi đáp án thủ công; giữ ô trống khi OCR thất bại",
     )
     return parser
 

@@ -19,7 +19,7 @@ from app.domain.models import (
     normalize_answer,
 )
 from app.repositories.answer_key import AnswerKeyRepository
-from app.repositories.database import Database
+from app.repositories.database import CURRENT_SCHEMA_VERSION, Database
 from app.services.adaptive import AdaptiveReviewService
 from app.services.data_scanner import DataScannerService
 from app.services.exam import ExamResult, ExamService
@@ -522,6 +522,57 @@ def test_adaptive_review_service_lists_all_learning_questions_in_file_order(
     database.close()
 
 
+def test_adaptive_review_includes_newly_synced_question_once_until_known(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "DATA"
+    initial_subject = make_questions(data_dir, 1)
+    database = Database(tmp_path / "new-question-review.sqlite3")
+    database.sync_questions(initial_subject.questions, [initial_subject.name])
+    database.rate_card(initial_subject.questions[0].id, known=True)
+
+    make_image(data_dir / initial_subject.name / "Selections_1_choose" / "Câu 2.png")
+    updated_subject = DataScannerService(data_dir).scan()[0]
+    database.sync_questions(updated_subject.questions, [updated_subject.name])
+    database.sync_questions(updated_subject.questions, [updated_subject.name])
+    answers = {question.relative_path: "A" for question in updated_subject.questions}
+
+    grouped = AdaptiveReviewService(
+        database, updated_subject.questions, answers
+    ).learning_by_category()
+    new_question = next(
+        question
+        for question in updated_subject.questions
+        if question.id != initial_subject.questions[0].id
+    )
+    entries = grouped["Selections_1_choose"]
+    assert [entry.question.id for entry in entries] == [new_question.id]
+    assert entries[0].card_state == "new"
+    assert database.card_stats(updated_subject.name) == {
+        "new": 1,
+        "known": 1,
+        "learning": 0,
+    }
+
+    database.rate_card(new_question.id, known=False)
+    learning_entries = AdaptiveReviewService(
+        database, updated_subject.questions, answers
+    ).learning_by_category()["Selections_1_choose"]
+    assert [entry.question.id for entry in learning_entries] == [new_question.id]
+    assert learning_entries[0].card_state == "learning"
+
+    database.rate_card(new_question.id, known=True)
+    assert not AdaptiveReviewService(
+        database, updated_subject.questions, answers
+    ).learning_by_category()["Selections_1_choose"]
+    assert database.card_stats(updated_subject.name) == {
+        "new": 0,
+        "known": 2,
+        "learning": 0,
+    }
+    database.close()
+
+
 def test_exam_rejects_count_over_valid_pool(tmp_path: Path) -> None:
     subject = make_questions(tmp_path / "DATA", 2)
     database = Database(tmp_path / "progress.sqlite3")
@@ -642,7 +693,8 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
     connection.commit()
     connection.close()
     database = Database(path)
-    backups = list(tmp_path.glob("legacy.pre-v1.*.sqlite3"))
+    backup_directory = tmp_path / "backups" / "database"
+    backups = list(backup_directory.glob("legacy.pre-v1.*.sqlite3"))
     assert backups == [database.migration_backup_path]
     with sqlite3.connect(backups[0]) as backup:
         assert backup.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -659,7 +711,7 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
     assert attempt["score"] == 5.0
     assert [row["awarded_score"] for row in database.exam_detail(1)] == [5.0, 0.0]
     version = database._connection.execute("SELECT version FROM schema_version").fetchone()[0]
-    assert version == 4
+    assert version == CURRENT_SCHEMA_VERSION
     tables = {
         row["name"]
         for row in database._connection.execute(
@@ -667,6 +719,8 @@ def test_database_migrates_legacy_exam_scores(tmp_path: Path) -> None:
         )
     }
     assert "question_error_stats" in tables
+    assert "question_bank_notifications" in tables
+    assert "question_bank_notification_changes" in tables
     database.close()
 
 
@@ -679,7 +733,9 @@ def test_database_does_not_backup_new_or_current_schema(tmp_path: Path) -> None:
     reopened = Database(path)
     assert reopened.migration_backup_path is None
     reopened.close()
-    assert list(tmp_path.glob("current.pre-v*.*.sqlite3")) == []
+    assert list(
+        (tmp_path / "backups" / "database").glob("current.pre-v*.*.sqlite3")
+    ) == []
 
 
 def test_database_aborts_migration_when_backup_fails(
