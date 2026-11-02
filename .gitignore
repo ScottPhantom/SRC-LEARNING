@@ -67,16 +67,5 @@ ocr_failures/
 **/.cursorrules
 **/.windsurfrules
 
-# Repository-owned Claude + Graft integration is intentionally versioned.
-# Other nested/local .claude directories remain ignored by the rule above.
-!/.claude/
-!/.claude/helpers/
-!/.claude/helpers/graft-hooks.cjs
-!/.claude/helpers/graft-statusline.cjs
-!/.claude/settings.json
-!/.claude/skills/
-!/.claude/skills/graft/
-!/.claude/skills/graft/SKILL.md
-
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
