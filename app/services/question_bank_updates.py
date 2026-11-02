@@ -11,14 +11,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-import cv2
-import pytesseract
-
 from app.config import MULTIPLE_CATEGORY
 from app.domain.models import Question, Subject, normalize_answer
 from app.repositories.answer_key import AnswerKeyRepository, normalize_relative_path
 from app.repositories.database import Database
-from app.services.answer_ocr import crop_answer, read_image_unicode, recognize
 
 LOGGER = logging.getLogger(__name__)
 MANIFEST_SCHEMA_VERSION = 1
@@ -173,6 +169,10 @@ class QuestionBankUpdateChecker:
         self.answer_resolver = answer_resolver or self._ocr_answer
 
     def _ocr_answer(self, question: Question) -> str:
+        # OCR is an optional, heavy feature. Import it only when a newly added
+        # question has no approved answer in answers.csv.
+        from app.services.answer_ocr import crop_answer, read_image_unicode, recognize
+
         image = read_image_unicode(question.absolute_path)
         crop = crop_answer(image, self.crop_region)
         return recognize(crop, question.category == MULTIPLE_CATEGORY)
@@ -581,11 +581,10 @@ class QuestionBankUpdateChecker:
                 try:
                     candidate = normalize_answer(self.answer_resolver(question))
                 except (
+                    ImportError,
                     OSError,
                     ValueError,
                     RuntimeError,
-                    cv2.error,
-                    pytesseract.TesseractError,
                 ) as exc:
                     result.errors.append(f"{relative}: {exc}")
                     continue

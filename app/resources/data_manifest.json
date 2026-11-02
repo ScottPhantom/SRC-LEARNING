@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "subject": "AIL303m",
+      "file_id": "1r82uwHDR7LVfpVv74W75OZ6xWh-2odrP",
+      "sha256": "c7941c16548ff4e70ea1c397c044a296a8d67fff909295d68ce6c43e4d33b61c",
+      "archive_size": 18056033,
+      "enabled": true
+    }
+  ]
+}

@@ -110,7 +110,23 @@ direnv allow
 python main.py
 ```
 
-Ứng dụng mặc định đọc dữ liệu tại `DATA/` và lưu database tại `study_progress.sqlite3`. Người dùng có thể đổi thư mục dữ liệu trong phần Cài đặt.
+Khi chạy từ source, ứng dụng mặc định đọc dữ liệu tại `DATA/` và lưu database
+tại `study_progress.sqlite3`. Bản đóng gói lưu cả database và dữ liệu tải về
+trong `~/.luyen_thi_hinh_anh/`, vì thư mục cài đặt có thể không cho phép ghi.
+Người dùng vẫn có thể đổi thư mục dữ liệu trong phần Cài đặt.
+
+### Thêm môn học từ Google Drive
+
+1. Mở màn hình Home.
+2. Nhấn nút `+` ở cụm chức năng bên phải Header.
+3. Nhập Google Drive File ID hoặc link chia sẻ do quản trị viên cung cấp.
+4. Chọn **Tải và cài đặt**.
+
+Ứng dụng chỉ nhận các mã có trong manifest đã phê duyệt. Trước khi ghi vào
+`DATA/<Tên môn>`, ứng dụng kiểm tra SHA-256, giải nén trong thư mục tạm, chặn
+đường dẫn ZIP không an toàn, xác minh ảnh câu hỏi và `answers.csv`. Nếu môn đã
+tồn tại, người dùng phải xác nhận thay thế. Dữ liệu cũ được giữ nguyên khi tải,
+checksum, giải nén hoặc xác minh thất bại.
 
 ## Chức năng chính
 
@@ -188,7 +204,21 @@ PyInstaller phải chạy trên đúng hệ điều hành cần phát hành:
 pyinstaller --clean study_app.spec
 ```
 
-Ứng dụng đóng gói không bao gồm OpenCV hoặc Tesseract. Sao chép `DATA` cạnh ứng dụng hoặc chọn lại thư mục dữ liệu trong Cài đặt.
+Riêng macOS dùng spec dạng `.app` onedir để tương thích cơ chế bảo mật của hệ
+điều hành:
+
+```bash
+pyinstaller --clean study_app_macos.spec
+```
+
+Không thể build một binary duy nhất chạy trên cả ba hệ điều hành. Workflow CI
+build riêng artifact Windows x64, macOS Apple Silicon và Linux x86_64. Trên
+macOS, spec đồng thời tạo `SRC Learning.app`.
+
+Ứng dụng Core đóng gói không bao gồm OpenCV, Tesseract hoặc bộ `DATA`. Người
+dùng cài từng môn bằng nút `+` trên Header. OCR được nạp theo nhu cầu trong môi
+trường source và không chặn ứng dụng Core khởi động khi các thư viện OCR không
+có mặt.
 
 ## Xử lý lỗi thường gặp
 

@@ -142,6 +142,25 @@ QTableWidget#weakQuestionTable QHeaderView::section {
   border-bottom: 1px solid #cbd5e1; padding: 7px; font-weight: 800;
 }
 QDialog#questionBankNotificationDialog { background: #edf2f8; color: #172033; }
+QDialog#dataImportDialog { background: #edf2f8; color: #172033; }
+QFrame#dataImportCard {
+  background: #ffffff; border: 1px solid #dce2ec; border-radius: 18px;
+}
+QLabel#dataImportTitle { color: #172033; font-size: 22px; font-weight: 850; }
+QLabel#dataImportDescription { color: #64748b; font-size: 13px; }
+QLabel#dataImportStatus { color: #475569; font-size: 12px; font-weight: 700; }
+QLabel#dataImportStatus[error="true"] { color: #B42318; }
+QLineEdit#dataImportCodeInput {
+  background: #ffffff; color: #172033; border: 1px solid #94a3b8;
+  border-radius: 9px; padding: 10px 12px;
+}
+QLineEdit#dataImportCodeInput:focus { border: 2px solid #0A84FF; }
+QProgressBar#dataImportProgress {
+  border: 0; background: #dbe3ee; border-radius: 6px; height: 12px;
+  text-align: center; color: #172033; font-size: 10px; font-weight: 700;
+}
+QProgressBar#dataImportProgress::chunk { background: #0A84FF; border-radius: 6px; }
+QPushButton#dataImportInstallButton { background: #0A84FF; }
 QFrame#bankNotificationCard {
   background: #ffffff; border: 1px solid #dce2ec; border-radius: 18px;
 }
@@ -444,6 +463,25 @@ QTableWidget#weakQuestionTable QHeaderView::section {
   border-bottom: 1px solid #4b5563; padding: 7px; font-weight: 800;
 }
 QDialog#questionBankNotificationDialog { background: #0F1117; color: #F5F5F7; }
+QDialog#dataImportDialog { background: #0F1117; color: #F5F5F7; }
+QFrame#dataImportCard {
+  background: #171A21; border: 1px solid #343844; border-radius: 18px;
+}
+QLabel#dataImportTitle { color: #F8FAFC; font-size: 22px; font-weight: 850; }
+QLabel#dataImportDescription { color: #A1A1A6; font-size: 13px; }
+QLabel#dataImportStatus { color: #CBD5E1; font-size: 12px; font-weight: 700; }
+QLabel#dataImportStatus[error="true"] { color: #FF8A82; }
+QLineEdit#dataImportCodeInput {
+  background: #11141A; color: #F5F5F7; border: 1px solid #515866;
+  border-radius: 9px; padding: 10px 12px;
+}
+QLineEdit#dataImportCodeInput:focus { border: 2px solid #60A5FA; }
+QProgressBar#dataImportProgress {
+  border: 0; background: #333844; border-radius: 6px; height: 12px;
+  text-align: center; color: #F5F5F7; font-size: 10px; font-weight: 700;
+}
+QProgressBar#dataImportProgress::chunk { background: #60A5FA; border-radius: 6px; }
+QPushButton#dataImportInstallButton { background: #0A84FF; }
 QFrame#bankNotificationCard {
   background: #171A21; border: 1px solid #343844; border-radius: 18px;
 }

@@ -1710,18 +1710,22 @@ def test_app_header_actions_and_mode_toggle() -> None:
     win.show()
     QT_APP.processEvents()
 
+    data_import_calls = []
     history_calls = []
     refresh_calls = []
     settings_calls = []
 
+    header.data_import_requested.connect(lambda: data_import_calls.append(True))
     header.history_requested.connect(lambda: history_calls.append(True))
     header.refresh_requested.connect(lambda: refresh_calls.append(True))
     header.settings_requested.connect(lambda: settings_calls.append(True))
 
+    header.data_import_button.click()
     header.history_button.click()
     header.refresh_button.click()
     header.settings_button.click()
 
+    assert len(data_import_calls) == 1
     assert len(history_calls) == 1
     assert len(refresh_calls) == 1
     assert len(settings_calls) == 1
@@ -1748,6 +1752,34 @@ def test_app_header_actions_and_mode_toggle() -> None:
     assert header.action_capsule.isVisible()
     win.close()
     win.deleteLater()
+
+
+def test_data_import_dialog_requires_code_and_emits_request() -> None:
+    from app.ui.data_import_dialog import DataImportDialog
+
+    dialog = DataImportDialog()
+    emitted: list[str] = []
+    dialog.install_requested.connect(emitted.append)
+    dialog.show()
+    QT_APP.processEvents()
+
+    dialog.install_button.click()
+    assert not emitted
+    assert "Hãy nhập" in dialog.status_label.text()
+
+    dialog.code_input.setText("1r82uwHDR7LVfpVv74W75OZ6xWh-2odrP")
+    dialog.install_button.click()
+    assert emitted == ["1r82uwHDR7LVfpVv74W75OZ6xWh-2odrP"]
+
+    dialog.set_running(True)
+    assert not dialog.code_input.isEnabled()
+    assert dialog.progress_bar.isVisible()
+    dialog.update_progress("extract", 62, "Đang giải nén…")
+    assert dialog.progress_bar.value() == 62
+    assert dialog.status_label.text() == "Đang giải nén…"
+
+    dialog.set_running(False)
+    dialog.close()
 
 
 def test_history_tree_groups_subjects_formats_local_time_and_selects_only_exams() -> (

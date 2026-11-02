@@ -23,11 +23,17 @@ from PyQt5.QtWidgets import (
 )
 
 from app.config import APP_NAME, DEFAULT_DATA_DIR
+from app.controllers.data_install_worker import DataInstallTask
 from app.controllers.scan_worker import ScanTask
 from app.domain.models import AppSettings, ExamConfig, Subject
 from app.repositories.answer_key import AnswerKeyReport, AnswerKeyRepository
 from app.repositories.database import Database
 from app.services.adaptive import AdaptiveReviewService
+from app.services.data_package_installer import (
+    DataInstallResult,
+    DataPackageError,
+    DataPackageInstaller,
+)
 from app.services.exam import ExamResult, ExamService, ExamSession
 from app.services.question_bank_updates import (
     PENDING_ANSWERS_FILE,
@@ -36,6 +42,7 @@ from app.services.question_bank_updates import (
 )
 from app.services.study import CrammingService, FlashcardService
 from app.ui.background import AppShell
+from app.ui.data_import_dialog import DataImportDialog
 from app.ui.screens import (
     AppHeader,
     CrammingScreen,
@@ -79,6 +86,7 @@ class MainWindow(QMainWindow):
         shell_layout.setSpacing(0)
         self.app_header = AppHeader()
         self.app_header.home_requested.connect(self.show_home)
+        self.app_header.data_import_requested.connect(self.show_data_import)
         self.app_header.history_requested.connect(self.show_history)
         self.app_header.refresh_requested.connect(self.refresh_data)
         self.app_header.settings_requested.connect(self.show_settings)
@@ -109,6 +117,9 @@ class MainWindow(QMainWindow):
         self._scan_running = False
         self._rescan_requested = False
         self._bank_update_dialog: QuestionBankNotificationDialog | None = None
+        self._data_import_dialog: DataImportDialog | None = None
+        self._data_install_task: DataInstallTask | None = None
+        self._data_package_installer = DataPackageInstaller()
         self.theme_manager = ThemeManager(QApplication.instance())
         self._apply_theme(self.settings.theme)
         self.refresh_data()
@@ -243,6 +254,72 @@ class MainWindow(QMainWindow):
         task.signals.completed.connect(self._apply_scan_result)
         task.signals.failed.connect(self._scan_failed)
         self.thread_pool.start(task)
+
+    def show_data_import(self) -> None:
+        if self._data_import_dialog is not None:
+            self._data_import_dialog.raise_()
+            self._data_import_dialog.activateWindow()
+            return
+        dialog = DataImportDialog(self)
+        dialog.install_requested.connect(self._start_data_install)
+        dialog.finished.connect(self._data_import_dialog_closed)
+        self._data_import_dialog = dialog
+        dialog.open()
+
+    def _data_import_dialog_closed(self) -> None:
+        self._data_import_dialog = None
+
+    def _start_data_install(self, code: str) -> None:
+        dialog = self._data_import_dialog
+        if dialog is None or self._data_install_task is not None:
+            return
+        try:
+            package = self._data_package_installer.catalog.resolve(code)
+        except DataPackageError as exc:
+            dialog.show_error(str(exc))
+            return
+
+        destination = self.data_dir / package.subject
+        replace_existing = destination.exists() or destination.is_symlink()
+        if replace_existing:
+            answer = QMessageBox.question(
+                self,
+                "Thay thế dữ liệu môn học?",
+                f"Môn {package.subject} đã tồn tại trong DATA. "
+                "Bạn có muốn thay thế bằng gói đã xác minh không?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        dialog.set_running(True)
+        task = DataInstallTask(
+            self._data_package_installer,
+            code,
+            self.data_dir,
+            replace_existing=replace_existing,
+        )
+        task.signals.progress.connect(dialog.update_progress)
+        task.signals.completed.connect(self._data_install_completed)
+        task.signals.failed.connect(self._data_install_failed)
+        self._data_install_task = task
+        self.thread_pool.start(task)
+
+    def _data_install_completed(self, result: DataInstallResult) -> None:
+        self._data_install_task = None
+        dialog = self._data_import_dialog
+        if dialog is not None:
+            dialog.show_complete(
+                f"Đã cài {result.subject} với {result.question_count} câu hỏi."
+            )
+        self.refresh_data()
+
+    def _data_install_failed(self, message: str) -> None:
+        self._data_install_task = None
+        dialog = self._data_import_dialog
+        if dialog is not None:
+            dialog.show_error(message)
 
     def _apply_scan_result(self, scanned_dir: Path, subjects: list[Subject]) -> None:
         self._scan_running = False

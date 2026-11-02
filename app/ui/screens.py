@@ -274,6 +274,7 @@ class AppHeader(QFrame):
     """Header nhận diện và điều hướng dùng chung cho toàn ứng dụng."""
 
     home_requested = pyqtSignal()
+    data_import_requested = pyqtSignal()
     history_requested = pyqtSignal()
     refresh_requested = pyqtSignal()
     settings_requested = pyqtSignal()
@@ -303,6 +304,10 @@ class AppHeader(QFrame):
         capsule_layout.setSpacing(4)
         capsule_layout.setAlignment(Qt.AlignCenter)
 
+        self.data_import_button = AnimatedHeaderActionButton("Thêm môn học")
+        self.data_import_button.setIconSize(QSize(24, 24))
+        self.data_import_button.clicked.connect(self.data_import_requested)
+
         self.history_button = AnimatedHeaderActionButton("Lịch sử thi")
         self.history_button.setIconSize(QSize(24, 24))
         self.history_button.clicked.connect(self.history_requested)
@@ -315,6 +320,7 @@ class AppHeader(QFrame):
         self.settings_button.setIconSize(QSize(24, 24))
         self.settings_button.clicked.connect(self.settings_requested)
 
+        capsule_layout.addWidget(self.data_import_button, alignment=Qt.AlignCenter)
         capsule_layout.addWidget(self.history_button, alignment=Qt.AlignCenter)
         capsule_layout.addWidget(self.refresh_button, alignment=Qt.AlignCenter)
         capsule_layout.addWidget(self.settings_button, alignment=Qt.AlignCenter)
@@ -330,6 +336,7 @@ class AppHeader(QFrame):
         icon_color = QColor("#A1A1A6") if is_dark else QColor("#515154")
 
         self.home_button.update_theme()
+        self.data_import_button.set_action_icon("add", icon_color)
         self.history_button.set_action_icon("history", icon_color)
         self.refresh_button.set_action_icon("refresh", icon_color)
         self.settings_button.set_action_icon("settings", icon_color)

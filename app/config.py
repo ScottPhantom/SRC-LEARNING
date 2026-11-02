@@ -14,7 +14,9 @@ STATE_DIR = (
     if getattr(sys, "frozen", False)
     else APP_DIR
 )
-DEFAULT_DATA_DIR = APP_DIR / "DATA"
+DEFAULT_DATA_DIR = (
+    STATE_DIR / "DATA" if getattr(sys, "frozen", False) else APP_DIR / "DATA"
+)
 DEFAULT_DB_PATH = STATE_DIR / "study_progress.sqlite3"
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}

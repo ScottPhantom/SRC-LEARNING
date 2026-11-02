@@ -47,6 +47,18 @@ def create_line_icon(
         path.lineTo(center.x() + radius * 0.45, center.y())
         painter.drawPath(path)
 
+    elif icon_type == "add":
+        # Dấu cộng dùng cho thao tác thêm gói dữ liệu môn học.
+        arm = rect.width() * 0.32
+        painter.drawLine(
+            QPointF(center.x() - arm, center.y()),
+            QPointF(center.x() + arm, center.y()),
+        )
+        painter.drawLine(
+            QPointF(center.x(), center.y() - arm),
+            QPointF(center.x(), center.y() + arm),
+        )
+
     elif icon_type == "refresh":
         # Circular arrow: the filled head shares its tip with the arc endpoint,
         # avoiding the detached/skewed arrowhead seen with the old stroked V.
