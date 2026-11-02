@@ -1000,9 +1000,15 @@ def test_main_window_fades_between_subject_and_study_screens(tmp_path: Path) -> 
     assert window._transition_group is not None
     assert window._transition_group.duration() == 300
     assert window.stack.currentWidget() is old_page
-    QTest.qWait(180)
+    for _ in range(50):
+        if window.stack.currentWidget() is new_page:
+            break
+        QTest.qWait(20)
     assert window.stack.currentWidget() is new_page
-    QTest.qWait(180)
+    for _ in range(50):
+        if not window._transition_in_progress:
+            break
+        QTest.qWait(20)
     assert not window._transition_in_progress
     assert window._transition_group is None
     assert window.stack.count() == 2  # Home + màn hình mới.
@@ -2116,6 +2122,11 @@ def test_replace_restores_files_when_database_sync_fails(tmp_path: Path, monkeyp
     window = MainWindow(database)
     window.thread_pool.waitForDone(2000)
     QT_APP.processEvents()
+    # The UI removes QFileSystemWatcher handles before moving a subject on
+    # Windows; this direct service setup must do the same.
+    watched_paths = window.watcher.directories() + window.watcher.files()
+    if watched_paths:
+        window.watcher.removePaths(watched_paths)
     backup = SubjectManager(tmp_path / "DATA").remove(subject.name)
     subject.path.mkdir()
     (subject.path / "new.txt").write_text("new", encoding="utf-8")

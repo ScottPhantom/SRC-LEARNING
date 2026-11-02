@@ -537,9 +537,17 @@ class MainWindow(QMainWindow):
         self.database.sync_questions(
             all_questions, [subject.name for subject in subjects]
         )
-        bank_results = QuestionBankUpdateChecker(
-            self.database, self.settings.crop_region
-        ).check(subjects, apply=True)
+        # Windows keeps watched files/directories open. Release their handles
+        # while the answer bank atomically replaces answers.csv and manifests.
+        watched_paths = self.watcher.directories() + self.watcher.files()
+        if watched_paths:
+            self.watcher.removePaths(watched_paths)
+        try:
+            bank_results = QuestionBankUpdateChecker(
+                self.database, self.settings.crop_region
+            ).check(subjects, apply=True)
+        finally:
+            self._reset_watch_paths(subjects)
         answer_repository = AnswerKeyRepository()
         self.answer_reports = {
             subject.name: answer_repository.load(subject.path, subject.questions)
@@ -547,7 +555,6 @@ class MainWindow(QMainWindow):
         }
         self.home.set_subjects(subjects, self.data_dir)
         self._report_bank_update_errors(bank_results)
-        self._reset_watch_paths(subjects)
         if selected_subject_name is not None:
             self.current_subject = self.subjects.get(selected_subject_name)
         if refresh_subject_dashboard and self.current_subject is not None:
