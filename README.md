@@ -128,6 +128,25 @@ Người dùng vẫn có thể đổi thư mục dữ liệu trong phần Cài �
 tồn tại, người dùng phải xác nhận thay thế. Dữ liệu cũ được giữ nguyên khi tải,
 checksum, giải nén hoặc xác minh thất bại.
 
+### Quản lý môn học
+
+Trên Home, chọn **Cài đặt → Quản lý môn học** để xem các môn trong thư mục DATA, số câu,
+dung lượng, đường dẫn và trạng thái. Chọn một môn rồi chọn **Xóa môn đã chọn**;
+ứng dụng yêu cầu nhập đúng tên môn. Thư mục môn được chuyển nguyên vẹn vào
+`.src-learning-recovery` cạnh DATA để có thể khôi phục thủ công. Lịch sử học và
+thi trong SQLite được giữ nguyên; các câu hỏi của môn đã xóa được đánh dấu
+không hoạt động. Khi môn có phiên học hoặc bài thi đang diễn ra, ứng dụng yêu cầu
+xử lý phiên trước khi xóa hoặc thay thế. Ứng dụng sẽ hỏi trước khi hủy
+phiên học dở dang; tiến độ đánh giá câu hỏi và lịch sử đã lưu vẫn được giữ.
+Không cần học hết câu hỏi hoặc đạt 100% mới được xóa môn. Với bài thi đang làm,
+hãy nộp hoặc xác nhận thoát bài thi trong hộp thoại.
+
+Nếu nhập mã tải cho môn đã cài, chọn **Hủy** hoặc **Xác minh và thay thế**.
+Ứng dụng xác minh toàn bộ gói trước, chuyển thư mục cũ vào vùng khôi phục, rồi
+đổi thư mục mới vào DATA. Nếu bước đổi thất bại, ứng dụng tự đưa bản cũ trở lại.
+Không trộn từng tệp của hai phiên bản. Vùng khôi phục không được tự động dọn;
+người dùng có thể kiểm tra và quản lý dung lượng ở đó.
+
 ## Chức năng chính
 
 ### Flash Cards

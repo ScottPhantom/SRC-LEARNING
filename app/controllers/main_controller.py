@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from PyQt5.QtCore import (
@@ -16,6 +18,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtWidgets import (
     QApplication,
     QGraphicsOpacityEffect,
+    QInputDialog,
     QMainWindow,
     QMessageBox,
     QStackedWidget,
@@ -41,6 +44,7 @@ from app.services.question_bank_updates import (
     QuestionBankUpdateChecker,
 )
 from app.services.study import CrammingService, FlashcardService
+from app.services.subject_management import SubjectManagementError, SubjectManager
 from app.ui.background import AppShell
 from app.ui.data_import_dialog import DataImportDialog
 from app.ui.screens import (
@@ -56,6 +60,7 @@ from app.ui.screens import (
     SettingsScreen,
 )
 from app.ui.subject_dashboard import QuestionBankNotificationDialog
+from app.ui.subject_management_panel import SubjectManagementPanel
 from app.ui.themes import ThemeManager
 
 LOGGER = logging.getLogger(__name__)
@@ -116,6 +121,7 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self._scan_running = False
         self._rescan_requested = False
+        self._closing = False
         self._bank_update_dialog: QuestionBankNotificationDialog | None = None
         self._data_import_dialog: DataImportDialog | None = None
         self._data_install_task: DataInstallTask | None = None
@@ -245,6 +251,8 @@ class MainWindow(QMainWindow):
         return True
 
     def refresh_data(self) -> None:
+        if self._closing:
+            return
         if self._scan_running:
             self._rescan_requested = True
             return
@@ -269,6 +277,131 @@ class MainWindow(QMainWindow):
     def _data_import_dialog_closed(self) -> None:
         self._data_import_dialog = None
 
+    def _management_panel(self) -> SubjectManagementPanel | None:
+        page = self._dynamic_page
+        return page.subject_management_panel if isinstance(page, SettingsScreen) else None
+
+    def _ask_cancel_active_learning(self, name: str) -> bool:
+        prompt = QMessageBox(self)
+        prompt.setWindowTitle("Hủy phiên học đang hoạt động")
+        prompt.setIcon(QMessageBox.Warning)
+        prompt.setText(f"Môn {name} có phiên học đang hoạt động. Hủy phiên để tiếp tục?")
+        prompt.setInformativeText(
+            "Tiến độ đánh giá câu hỏi và lịch sử đã lưu vẫn được giữ. "
+            "Phiên học đang dở sẽ không thể tiếp tục."
+        )
+        cancel = prompt.addButton("Giữ phiên và hủy thao tác", QMessageBox.RejectRole)
+        proceed = prompt.addButton("Hủy phiên và tiếp tục", QMessageBox.DestructiveRole)
+        prompt.setDefaultButton(cancel)
+        prompt.setEscapeButton(cancel)
+        prompt.exec_()
+        return prompt.clickedButton() is proceed
+
+    def _confirm_subject_session_exit(self, name: str) -> bool:
+        if (
+            self.current_subject is not None
+            and self.current_subject.name == name
+            and self.active_exam_screen is not None
+            and self.active_exam_screen.active
+            and not self._resolve_active_exam_exit()
+        ):
+            return False
+        if not (self.database.active_flash_session(name) or self.database.active_cram_cycle(name)):
+            return True
+        if not self._ask_cancel_active_learning(name):
+            return False
+        self.database.delete_active_flash_session(name)
+        self.database.delete_active_cram_cycle(name)
+        return True
+
+    def show_subject_management(self) -> None:
+        self.show_settings(management=True)
+
+    def _refresh_subject_management(self) -> None:
+        panel = self._management_panel()
+        if panel is None:
+            return
+        try:
+            infos = []
+            for info in SubjectManager(self.data_dir).inventory():
+                scanned = self.subjects.get(info.name)
+                report = self.answer_reports.get(info.name)
+                if info.status == "Sẵn sàng" and scanned is not None and report is not None:
+                    valid = (
+                        not scanned.invalid_images and report.file_found
+                        and not report.missing and not report.invalid
+                        and not report.duplicates and not report.unknown_paths
+                    )
+                    info = replace(
+                        info, question_count=scanned.question_count,
+                        status="Sẵn sàng" if valid else "Cần kiểm tra dữ liệu",
+                    )
+                infos.append(info)
+            panel.set_subjects(infos)
+        except OSError as exc:
+            panel.status_label.setText(f"Không đọc được danh sách môn học: {exc}")
+
+    def _add_from_management(self) -> None:
+        self.show_data_import()
+
+    def _delete_subject(self, name: str) -> None:
+        panel = self._management_panel()
+        if panel is None:
+            return
+        typed, accepted = QInputDialog.getText(
+            self, "Xác nhận xóa môn học",
+            f"Nhập chính xác {name} để chuyển môn vào vùng khôi phục. Lịch sử học/thi được giữ:",
+        )
+        if not accepted or typed != name:
+            panel.status_label.setText("Đã hủy xóa môn học.")
+            return
+        try:
+            if not self._confirm_subject_session_exit(name):
+                panel.status_label.setText("Đã giữ phiên học; chưa xóa môn.")
+                return
+        except (sqlite3.Error, OSError) as exc:
+            panel.status_label.setText(f"Không hủy được phiên học: {exc}")
+            return
+        panel.status_label.setText(f"Đang chuyển {name} vào vùng khôi phục…")
+        watched = [
+            path for path in self.watcher.directories() + self.watcher.files()
+            if Path(path) == self.data_dir / name or self.data_dir / name in Path(path).parents
+        ]
+        if watched:
+            self.watcher.removePaths(watched)
+        try:
+            backup = SubjectManager(self.data_dir).remove(name)
+        except SubjectManagementError as exc:
+            self._reset_watch_paths(list(self.subjects.values()))
+            panel.status_label.setText(str(exc))
+            return
+        remaining = [subject for subject_name, subject in self.subjects.items() if subject_name != name]
+        try:
+            self.database.sync_questions(
+                [question for subject in remaining for question in subject.questions],
+                [subject.name for subject in remaining],
+            )
+        except (sqlite3.Error, OSError) as exc:
+            try:
+                SubjectManager(self.data_dir).restore(name, backup)
+                message = f"Không cập nhật được tiến độ; đã khôi phục {name}: {exc}"
+            except SubjectManagementError as restore_exc:
+                message = f"Không cập nhật được tiến độ: {exc}. {restore_exc}"
+            self._reset_watch_paths(list(self.subjects.values()))
+            panel.show_operation_message(message)
+            self.refresh_data()
+            return
+        self._rescan_requested = self._scan_running
+        self.subjects.pop(name, None)
+        self.answer_reports.pop(name, None)
+        if self.current_subject is not None and self.current_subject.name == name:
+            self.current_subject = None
+        self.home.set_subjects(remaining, self.data_dir)
+        self._reset_watch_paths(remaining)
+        self.refresh_data()
+        self._refresh_subject_management()
+        panel.show_operation_message(f"Đã chuyển {name} vào vùng khôi phục: {backup}")
+
     def _start_data_install(self, code: str) -> None:
         dialog = self._data_import_dialog
         if dialog is None or self._data_install_task is not None:
@@ -279,19 +412,36 @@ class MainWindow(QMainWindow):
             dialog.show_error(str(exc))
             return
 
-        destination = self.data_dir / package.subject
+        try:
+            destination = SubjectManager(self.data_dir).destination(
+                package.subject, require_existing=False
+            )
+        except SubjectManagementError as exc:
+            dialog.show_error(str(exc))
+            return
         replace_existing = destination.exists() or destination.is_symlink()
         if replace_existing:
-            answer = QMessageBox.question(
-                self,
-                "Thay thế dữ liệu môn học?",
-                f"Môn {package.subject} đã tồn tại trong DATA. "
-                "Bạn có muốn thay thế bằng gói đã xác minh không?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
+            prompt = QMessageBox(self)
+            prompt.setWindowTitle("Thay thế dữ liệu môn học")
+            prompt.setIcon(QMessageBox.Warning)
+            prompt.setText(f"Môn {package.subject} đã tồn tại. Xác minh gói mới rồi sao lưu và thay thế?")
+            prompt.setInformativeText("Dữ liệu cũ được giữ trong vùng khôi phục. Nếu thay thế lỗi, ứng dụng sẽ tự khôi phục.")
+            cancel = prompt.addButton("Hủy", QMessageBox.RejectRole)
+            replace = prompt.addButton("Xác minh và thay thế", QMessageBox.AcceptRole)
+            prompt.setDefaultButton(cancel)
+            prompt.setEscapeButton(cancel)
+            prompt.exec_()
+            if prompt.clickedButton() is not replace:
+                dialog.status_label.setText("Đã hủy thay thế môn học.")
                 return
+
+        try:
+            if not self._confirm_subject_session_exit(package.subject):
+                dialog.status_label.setText("Đã giữ phiên học; chưa cài đặt môn.")
+                return
+        except (sqlite3.Error, OSError) as exc:
+            dialog.show_error(f"Không hủy được phiên học: {exc}")
+            return
 
         dialog.set_running(True)
         task = DataInstallTask(
@@ -307,31 +457,67 @@ class MainWindow(QMainWindow):
         self.thread_pool.start(task)
 
     def _data_install_completed(self, result: DataInstallResult) -> None:
+        if self._closing:
+            return
         self._data_install_task = None
         dialog = self._data_import_dialog
+        if result.backup_path is not None:
+            remaining = [
+                subject for name, subject in self.subjects.items()
+                if name != result.subject
+            ]
+            try:
+                self.database.sync_questions(
+                    [question for subject in remaining for question in subject.questions],
+                    [subject.name for subject in remaining],
+                )
+            except (sqlite3.Error, OSError) as exc:
+                try:
+                    SubjectManager(self.data_dir).restore(result.subject, result.backup_path)
+                    message = f"Không cập nhật được dữ liệu học; đã khôi phục bản cũ: {exc}"
+                except SubjectManagementError as restore_exc:
+                    message = f"Không cập nhật được dữ liệu học: {exc}. {restore_exc}"
+                if dialog is not None:
+                    dialog.show_error(message)
+                self.refresh_data()
+                return
+            self.subjects.pop(result.subject, None)
+            self.answer_reports.pop(result.subject, None)
+            self.home.set_subjects(remaining, self.data_dir)
+            self._reset_watch_paths(remaining)
         if dialog is not None:
             dialog.show_complete(
                 f"Đã cài {result.subject} với {result.question_count} câu hỏi."
+                + (f" Bản cũ: {result.backup_path}" if result.backup_path else "")
             )
+        self._rescan_requested = self._scan_running
         self.refresh_data()
 
     def _data_install_failed(self, message: str) -> None:
+        if self._closing:
+            return
         self._data_install_task = None
         dialog = self._data_import_dialog
         if dialog is not None:
             dialog.show_error(message)
 
     def _apply_scan_result(self, scanned_dir: Path, subjects: list[Subject]) -> None:
+        if self._closing:
+            return
         self._scan_running = False
-        if Path(scanned_dir) != self.data_dir:
+        if Path(scanned_dir) != self.data_dir or self._rescan_requested:
             self._rescan_requested = True
         else:
             self._apply_subjects(subjects)
         if self._rescan_requested:
             self._rescan_requested = False
             self.refresh_data()
+        else:
+            self._refresh_subject_management()
 
     def _scan_failed(self, scanned_dir: Path, message: str) -> None:
+        if self._closing:
+            return
         self._scan_running = False
         LOGGER.warning("Không quét được %s: %s", scanned_dir, message)
         self.home.notice.setText(f"Không thể quét dữ liệu: {message}")
@@ -389,7 +575,7 @@ class MainWindow(QMainWindow):
             paths.append(str(self.data_dir))
         for subject in subjects:
             paths.append(str(subject.path))
-            paths.extend(str(path) for path in subject.path.iterdir() if path.is_dir())
+            paths.extend(str(path) for path in subject.path.iterdir() if path.is_dir() and not path.is_symlink())
             csv_path = subject.path / AnswerKeyRepository.FILE_NAME
             if csv_path.exists():
                 paths.append(str(csv_path))
@@ -623,7 +809,18 @@ class MainWindow(QMainWindow):
         ):
             self._dynamic_page.update_theme()
 
-    def show_settings(self) -> None:
+    def show_settings(self, management: bool = False) -> None:
+        if (
+            self.active_exam_screen is not None
+            and self.active_exam_screen.active
+            and not self._resolve_active_exam_exit()
+        ):
+            return
+        if isinstance(self._dynamic_page, SettingsScreen):
+            if management:
+                self._dynamic_page.select_management_tab()
+                self._refresh_subject_management()
+            return
         # Tìm đường dẫn ảnh câu hỏi hợp lệ đầu tiên từ các môn học (sắp xếp tên môn cố định)
         preview_path = next(
             (
@@ -642,7 +839,15 @@ class MainWindow(QMainWindow):
         page.back_requested.connect(self._cancel_settings)
         page.theme_preview_requested.connect(self._apply_theme)
         page.saved.connect(self._save_settings)
+        panel = page.subject_management_panel
+        panel.delete_requested.connect(self._delete_subject)
+        panel.refresh_requested.connect(self._refresh_subject_management)
+        panel.add_requested.connect(self._add_from_management)
+        page.tabs.currentChanged.connect(lambda _index: self._refresh_subject_management())
         self._set_dynamic_page(page)
+        if management:
+            page.select_management_tab()
+        self._refresh_subject_management()
 
     def _cancel_settings(self) -> None:
         self._apply_theme(self.settings.theme)
@@ -681,9 +886,17 @@ class MainWindow(QMainWindow):
         self.show_history()
 
     def closeEvent(self, event) -> None:
+        if self._data_install_task is not None:
+            QMessageBox.information(
+                self, "Đang cài đặt môn học",
+                "Hãy đợi quá trình tải và cài đặt hoàn tất trước khi đóng ứng dụng.",
+            )
+            event.ignore()
+            return
         if not self._resolve_active_exam_exit():
             event.ignore()
             return
+        self._closing = True
         if hasattr(self, "watcher"):
             try:
                 dirs = self.watcher.directories()

@@ -80,6 +80,7 @@ from app.ui.progress import SegmentedProgressBar, StudyProgressBar
 from app.ui.status_capsule import StatusCapsule
 from app.ui.subject_card import SubjectCard
 from app.ui.subject_dashboard import QuickReviewDialog, StudyModeCard
+from app.ui.subject_management_panel import SubjectManagementPanel
 
 
 def secondary(button: QPushButton) -> QPushButton:
@@ -307,6 +308,7 @@ class AppHeader(QFrame):
         self.data_import_button = AnimatedHeaderActionButton("Thêm môn học")
         self.data_import_button.setIconSize(QSize(24, 24))
         self.data_import_button.clicked.connect(self.data_import_requested)
+
 
         self.history_button = AnimatedHeaderActionButton("Lịch sử thi")
         self.history_button.setIconSize(QSize(24, 24))
@@ -2160,6 +2162,38 @@ class SettingsScreen(BasePage):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
+        self.settings_container = QWidget()
+        self.settings_container.setObjectName("settingsContainer")
+        self.settings_container.setMaximumWidth(1600)
+        self.settings_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        container_layout = QVBoxLayout(self.settings_container)
+        container_layout.setContentsMargins(32, 0, 32, 24)
+        container_layout.setSpacing(12)
+        centered = QHBoxLayout()
+        centered.setContentsMargins(0, 0, 0, 0)
+        centered.addStretch(1)
+        centered.addWidget(self.settings_container, 100)
+        centered.addStretch(1)
+        root_layout.addLayout(centered, 1)
+
+        top_widget = QWidget()
+        top = QHBoxLayout(top_widget)
+        top.setContentsMargins(0, 24, 0, 12)
+        top.addWidget(self.back_button())
+        title, subtitle = page_title("Cài đặt", "Tùy chỉnh ứng dụng và quản lý dữ liệu môn học.")
+        heading = QVBoxLayout()
+        heading.addWidget(title)
+        heading.addWidget(subtitle)
+        top.addLayout(heading, 1)
+        container_layout.addWidget(top_widget)
+
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("settingsTabs")
+        self.tabs.tabBar().setFocusPolicy(Qt.StrongFocus)
+        self.tabs.tabBar().setElideMode(Qt.ElideNone)
+        self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().setUsesScrollButtons(True)
+
         # ScrollArea cho SettingsScreen tương thích mọi độ phân giải (1100x700, 1280x800)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
@@ -2169,18 +2203,8 @@ class SettingsScreen(BasePage):
         self.content_widget = QWidget()
         self.content_widget.setObjectName("settingsContent")
         layout = QVBoxLayout(self.content_widget)
-        layout.setContentsMargins(32, 24, 32, 32)
+        layout.setContentsMargins(24, 28, 24, 24)
         layout.setSpacing(20)
-
-        # Header back button & title
-        top = QHBoxLayout()
-        top.addWidget(self.back_button())
-        title, subtitle = page_title("Cài đặt", "Tùy chỉnh giao diện, dữ liệu và vùng cắt đáp án.")
-        heading = QVBoxLayout()
-        heading.addWidget(title)
-        heading.addWidget(subtitle)
-        top.addLayout(heading, 1)
-        layout.addLayout(top)
 
         # Form card
         card = QFrame()
@@ -2278,7 +2302,13 @@ class SettingsScreen(BasePage):
         layout.addLayout(save_layout)
 
         self.scroll_area.setWidget(self.content_widget)
-        root_layout.addWidget(self.scroll_area)
+        self.tabs.addTab(self.scroll_area, "Chung")
+        self.subject_management_panel = SubjectManagementPanel()
+        self.tabs.addTab(self.subject_management_panel, "Quản lý môn học")
+        container_layout.addWidget(self.tabs, 1)
+
+    def select_management_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.subject_management_panel)
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Chọn thư mục DATA", self.data_path.text())

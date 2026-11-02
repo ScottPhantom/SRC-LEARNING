@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -16,6 +17,8 @@ from app.services.data_package_installer import (
     DataPackageSpec,
     UnknownPackageCodeError,
 )
+from app.services.data_scanner import DataScannerService
+from app.services.subject_management import SubjectManagementError, SubjectManager
 
 
 def make_subject_archive(root: Path, subject: str = "AIL303m") -> Path:
@@ -139,3 +142,114 @@ def test_safe_extract_rejects_zip_slip(tmp_path: Path) -> None:
         )
 
     assert not (tmp_path / "outside.txt").exists()
+
+
+def test_subject_remove_moves_exact_directory_and_keeps_neighbor(tmp_path: Path) -> None:
+    data = tmp_path / "DATA"
+    subject = data / "AIL303m"
+    neighbor = data / "OTHER101"
+    subject.mkdir(parents=True)
+    neighbor.mkdir()
+    (subject / "marker.txt").write_text("old", encoding="utf-8")
+    backup = SubjectManager(data).remove("AIL303m")
+    assert not subject.exists()
+    assert (backup / "marker.txt").read_text(encoding="utf-8") == "old"
+    assert neighbor.is_dir() and data.is_dir()
+    assert backup.parent == tmp_path / ".src-learning-recovery"
+
+
+@pytest.mark.parametrize("name", ["..", "../OTHER101", "AIL303m/..", "/tmp/AIL303m", ".hidden"])
+def test_subject_remove_rejects_path_attack(tmp_path: Path, name: str) -> None:
+    data = tmp_path / "DATA"
+    (data / "AIL303m").mkdir(parents=True)
+    with pytest.raises(SubjectManagementError):
+        SubjectManager(data).remove(name)
+    assert (data / "AIL303m").is_dir()
+
+
+def test_subject_remove_rejects_symlink_inside_or_as_destination(tmp_path: Path) -> None:
+    data = tmp_path / "DATA"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    data.mkdir()
+    (data / "LINK101").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(SubjectManagementError):
+        SubjectManager(data).remove("LINK101")
+    subject = data / "AIL303m"
+    subject.mkdir()
+    (subject / "escape").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(SubjectManagementError):
+        SubjectManager(data).remove("AIL303m")
+    assert outside.is_dir() and subject.is_dir()
+
+
+def test_subject_remove_rejects_unsafe_recovery_dir(tmp_path: Path) -> None:
+    data = tmp_path / "DATA"
+    subject = data / "AIL303m"
+    subject.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / ".src-learning-recovery").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(SubjectManagementError, match="Vùng khôi phục"):
+        SubjectManager(data).remove("AIL303m")
+    assert subject.is_dir() and not list(outside.iterdir())
+
+
+def test_restore_requires_backup_inside_recovery(tmp_path: Path) -> None:
+    data = tmp_path / "DATA"
+    data.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with pytest.raises(SubjectManagementError, match="Bản khôi phục"):
+        SubjectManager(data).restore("AIL303m", outside)
+
+
+def test_duplicate_requires_consent_and_replacement_keeps_backup(tmp_path: Path) -> None:
+    archive = make_subject_archive(tmp_path)
+    installer = installer_for(archive)
+    data = tmp_path / "app" / "DATA"
+    old = data / "AIL303m"
+    old.mkdir(parents=True)
+    (old / "old.txt").write_text("original", encoding="utf-8")
+    with pytest.raises(Exception, match="đã tồn tại"):
+        installer.install("approved-drive-file-id", data)
+    assert (old / "old.txt").is_file()
+    result = installer.install("approved-drive-file-id", data, replace_existing=True)
+    assert result.backup_path is not None
+    assert (result.backup_path / "old.txt").read_text(encoding="utf-8") == "original"
+    assert (old / "answers.csv").is_file()
+
+
+def test_replace_rolls_back_if_new_install_fails(tmp_path: Path, monkeypatch) -> None:
+    archive = make_subject_archive(tmp_path)
+    installer = installer_for(archive)
+    data = tmp_path / "app" / "DATA"
+    old = data / "AIL303m"
+    old.mkdir(parents=True)
+    (old / "old.txt").write_text("original", encoding="utf-8")
+    original_replace = os.replace
+
+    def fail_new(source, target):
+        if Path(target) == old and Path(source).name == "AIL303m":
+            raise OSError("disk error")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail_new)
+    with pytest.raises(DataPackageError, match="Không thể cài đặt"):
+        installer.install("approved-drive-file-id", data, replace_existing=True)
+    assert (old / "old.txt").read_text(encoding="utf-8") == "original"
+    assert not (old / "answers.csv").exists()
+
+
+def test_scanner_does_not_follow_subject_or_image_symlinks(tmp_path: Path) -> None:
+    data = tmp_path / "DATA"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    Image.new("RGB", (10, 10), "white").save(outside / "question.png")
+    data.mkdir()
+    (data / "LINK101").symlink_to(outside, target_is_directory=True)
+    category = data / "SAFE101" / "Selections_1_choose"
+    category.mkdir(parents=True)
+    (category / "external.png").symlink_to(outside / "question.png")
+    subjects = DataScannerService(data).scan()
+    assert subjects == []

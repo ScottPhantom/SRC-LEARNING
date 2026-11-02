@@ -933,6 +933,14 @@ class Database:
             "SELECT * FROM cram_cycles WHERE subject=? AND status='active'", (subject,)
         ).fetchone()
 
+    def delete_active_cram_cycle(self, subject: str) -> None:
+        """Discard only the resumable cycle; graded question progress remains."""
+        with self.transaction() as connection:
+            connection.execute(
+                "DELETE FROM cram_cycles WHERE subject=? AND status='active'",
+                (subject,),
+            )
+
     def latest_cram_cycle(self, subject: str) -> sqlite3.Row | None:
         return self._connection.execute(
             "SELECT * FROM cram_cycles WHERE subject=? ORDER BY id DESC LIMIT 1",

@@ -6,13 +6,15 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PIL import Image
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QColor, QKeyEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QHeaderView,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -34,6 +36,7 @@ from app.repositories.database import Database
 from app.services.data_scanner import DataScannerService
 from app.services.exam import ExamService
 from app.services.study import CrammingService, FlashcardService
+from app.services.subject_management import SubjectInfo
 from app.ui import themes
 from app.ui.answer_options import AnswerOptionsWidget
 from app.ui.image_viewer import QuestionImageViewer
@@ -49,6 +52,7 @@ from app.ui.screens import (
     SettingsScreen,
 )
 from app.ui.subject_dashboard import QuestionBankNotificationDialog
+from app.ui.subject_management_panel import SubjectManagementPanel
 from app.ui.themes import DARK_STYLE, LIGHT_STYLE, ThemeManager
 
 QT_APP = QApplication.instance() or QApplication([])
@@ -1047,6 +1051,15 @@ def test_settings_combobox_emits_live_preview_without_persisting(
     database.set_setting("theme", "light")
     settings = AppSettings(theme="light", data_dir=str(tmp_path / "DATA"))
     screen = SettingsScreen(settings)
+    assert [screen.tabs.tabText(index) for index in range(screen.tabs.count())] == [
+        "Chung", "Quản lý môn học"
+    ]
+    assert screen.tabs.currentWidget() is screen.scroll_area
+    screen.select_management_tab()
+    assert screen.tabs.currentWidget() is screen.subject_management_panel
+    assert screen.data_path.text() == str(tmp_path / "DATA")
+    assert len(screen.crop_values) == 4
+    screen.tabs.setCurrentWidget(screen.scroll_area)
     requested: list[str] = []
     screen.theme_preview_requested.connect(requested.append)
 
@@ -1057,6 +1070,95 @@ def test_settings_combobox_emits_live_preview_without_persisting(
     assert "tự dò" in screen.theme.toolTip()
     screen.deleteLater()
     database.close()
+
+
+@pytest.mark.parametrize("width,height", [(1100, 700), (1280, 800), (2400, 900)])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_settings_management_geometry_and_table_resize(
+    width: int, height: int, theme: str
+) -> None:
+    ThemeManager(QT_APP).apply(theme)
+    screen = SettingsScreen(AppSettings(theme=theme))
+    path = Path("/Users/example/SRC-Project/SRC-LEARNING/DATA/AIL303m")
+    panel = screen.subject_management_panel
+    panel.set_subjects(
+        [
+            SubjectInfo("AIL303m", path, 154, 20_000_000, "Sẵn sàng"),
+            SubjectInfo("ITE303c", path.parent / "ITE303c", 296, 18_000_000, "Sẵn sàng"),
+        ]
+    )
+    screen.resize(width, height)
+    screen.select_management_tab()
+    screen.show()
+    QT_APP.processEvents()
+
+    tab_x = screen.tabs.mapTo(screen, QPoint(0, 0)).x()
+    expected_x = screen.settings_container.mapTo(screen, QPoint(0, 0)).x() + 32
+    assert tab_x == expected_x
+    assert screen.settings_container.width() <= 1600
+    assert panel.findChild(QWidget, "subjectManagementTitle").mapTo(
+        screen, QPoint(0, 0)
+    ).y() - screen.tabs.tabBar().mapTo(screen, QPoint(0, 0)).y() - screen.tabs.tabBar().height() >= 24
+
+    tab_bar = screen.tabs.tabBar()
+    heights = [tab_bar.tabRect(index).height() for index in range(2)]
+    assert heights[0] == heights[1]
+    assert tab_bar.tabRect(0).right() < tab_bar.tabRect(1).left()
+    for index in range(2):
+        label = screen.tabs.tabText(index)
+        assert tab_bar.tabRect(index).width() >= tab_bar.fontMetrics().horizontalAdvance(label) + 20
+    screen.tabs.setCurrentIndex(0)
+    QT_APP.processEvents()
+    assert [tab_bar.tabRect(index).height() for index in range(2)] == heights
+    assert tab_bar.focusPolicy() == Qt.StrongFocus
+    assert "QTabWidget#settingsTabs QTabBar::tab:focus" in (
+        DARK_STYLE if theme == "dark" else LIGHT_STYLE
+    )
+    tab_bar.clearFocus()
+    QT_APP.processEvents()
+    unfocused_tabs = tab_bar.grab().toImage()
+    tab_bar.setFocus()
+    QT_APP.processEvents()
+    assert tab_bar.hasFocus()
+    assert tab_bar.grab().toImage() != unfocused_tabs
+
+    screen.select_management_tab()
+    QT_APP.processEvents()
+    header = panel.table.horizontalHeader()
+    assert [header.sectionResizeMode(i) for i in range(5)] == [
+        QHeaderView.ResizeToContents,
+        QHeaderView.Fixed,
+        QHeaderView.Fixed,
+        QHeaderView.Stretch,
+        QHeaderView.ResizeToContents,
+    ]
+    assert not header.stretchLastSection()
+    assert panel.table.columnWidth(3) > panel.table.columnWidth(4) * 2
+    assert panel.table.item(0, 3).toolTip() == str(path)
+    assert panel.table.height() < 200
+    screen.close()
+    screen.deleteLater()
+    ThemeManager(QT_APP).apply("light")
+
+
+def test_settings_management_table_scrolls_when_many_subjects() -> None:
+    screen = SettingsScreen(AppSettings())
+    panel = screen.subject_management_panel
+    panel.set_subjects(
+        [
+            SubjectInfo(f"COURSE{index:02d}", Path(f"/DATA/COURSE{index:02d}"), 10, 5000, "Sẵn sàng")
+            for index in range(20)
+        ]
+    )
+    screen.resize(1100, 700)
+    screen.select_management_tab()
+    screen.show()
+    QT_APP.processEvents()
+    assert panel.table.rowCount() == 20
+    assert panel.table.height() < 350
+    assert panel.table.verticalScrollBar().maximum() > 0
+    screen.close()
+    screen.deleteLater()
 
 
 def test_controller_live_previews_then_persists_theme_only_on_save(
@@ -1086,6 +1188,8 @@ def test_controller_live_previews_then_persists_theme_only_on_save(
     assert database.get_setting("theme") == "dark"
     assert window.settings.theme == "dark"
     window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    window.close()
     window.deleteLater()
     ThemeManager(QT_APP, system_detector=lambda: "Light").apply("light")
     database.close()
@@ -1729,6 +1833,7 @@ def test_app_header_actions_and_mode_toggle() -> None:
     assert len(history_calls) == 1
     assert len(refresh_calls) == 1
     assert len(settings_calls) == 1
+    assert not hasattr(header, "subject_management_button")
 
     animated = header.refresh_button
     QApplication.sendEvent(animated, QEvent(QEvent.Enter))
@@ -1780,6 +1885,262 @@ def test_data_import_dialog_requires_code_and_emits_request() -> None:
 
     dialog.set_running(False)
     dialog.close()
+
+
+def test_subject_management_delete_keeps_progress_and_refreshes_home(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from PyQt5.QtWidgets import QInputDialog
+
+    subject = make_subject(tmp_path, 1)
+    database = Database(tmp_path / "manage.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    database.rate_card(subject.questions[0].id, known=False)
+    window.show_subject_management()
+    dialog = window._management_panel()
+    assert isinstance(dialog, SubjectManagementPanel)
+    assert isinstance(window._dynamic_page, SettingsScreen)
+    assert window._dynamic_page.tabs.currentWidget() is dialog
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 0).text() == "GUI101"
+    assert dialog.table.item(0, 1).text() == "1"
+    assert dialog.table.item(0, 3).text() == str(subject.path)
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_args: ("WRONG", True))
+    window._delete_subject(subject.name)
+    assert subject.path.exists()
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_args: (subject.name, True))
+    window._delete_subject(subject.name)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert not subject.path.exists()
+    assert subject.name not in window.subjects
+    assert dialog.table.rowCount() == 0
+    row = database._connection.execute(
+        "SELECT q.active, p.state FROM questions q JOIN card_progress p ON p.question_id=q.id WHERE q.id=?",
+        (subject.questions[0].id,),
+    ).fetchone()
+    assert tuple(row) == (0, "learning")
+    assert str(subject.path) not in window.watcher.directories(), window.watcher.directories()
+    assert (tmp_path / ".src-learning-recovery").is_dir()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_subject_management_confirms_cancel_active_learning_session(tmp_path: Path, monkeypatch) -> None:
+    from PyQt5.QtWidgets import QInputDialog
+
+    subject = make_subject(tmp_path, 1)
+    database = Database(tmp_path / "manage-active.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    database.create_flash_session(subject.name, [subject.questions[0].id])
+    window.show_subject_management()
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_args: (subject.name, True))
+    monkeypatch.setattr(window, "_ask_cancel_active_learning", lambda _name: False)
+    window._delete_subject(subject.name)
+    assert subject.path.is_dir()
+    assert database.active_flash_session(subject.name) is not None
+    assert "giữ phiên" in window._management_panel().status_label.text()
+    monkeypatch.setattr(window, "_ask_cancel_active_learning", lambda _name: True)
+    window._delete_subject(subject.name)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert not subject.path.exists()
+    assert database.active_flash_session(subject.name) is None
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_settings_management_tab_opens_import_from_add_button(tmp_path: Path) -> None:
+    from app.ui.data_import_dialog import DataImportDialog
+
+    data = tmp_path / "DATA"
+    data.mkdir()
+    database = Database(tmp_path / "settings-add.sqlite3")
+    database.set_setting("data_dir", str(data))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    window.show_settings()
+    page = window._dynamic_page
+    assert isinstance(page, SettingsScreen)
+    page.select_management_tab()
+    page.subject_management_panel.add_button.click()
+    assert isinstance(window._data_import_dialog, DataImportDialog)
+    window._data_import_dialog.reject()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_subject_management_cancels_active_cram_without_erasing_progress(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from PyQt5.QtWidgets import QInputDialog
+
+    subject = make_subject(tmp_path, 1)
+    database = Database(tmp_path / "manage-cram.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    database.rate_card(subject.questions[0].id, known=False)
+    database.create_cram_cycle(subject.name, 1, [[subject.questions[0].id]])
+    window.show_subject_management()
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_args: (subject.name, True))
+    monkeypatch.setattr(window, "_ask_cancel_active_learning", lambda _name: True)
+    window._delete_subject(subject.name)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert not subject.path.exists()
+    assert database.active_cram_cycle(subject.name) is None
+    row = database._connection.execute(
+        "SELECT state FROM card_progress WHERE question_id=?", (subject.questions[0].id,)
+    ).fetchone()
+    assert row[0] == "learning"
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_settings_management_requires_exam_exit_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    subject = make_subject(tmp_path, 1)
+    database = Database(tmp_path / "manage-exam.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    window.current_subject = subject
+    config = ExamConfig(
+        subject=subject.name,
+        categories=("Selections_1_choose",),
+        question_count=1,
+        duration_minutes=10,
+        feedback_mode=FeedbackMode.DEFERRED,
+    )
+    session = ExamService(
+        database, subject.questions, {subject.questions[0].relative_path: "A"}
+    ).create_session(config)
+    window.start_exam(session)
+    monkeypatch.setattr(window, "_ask_active_exam_exit", lambda: "cancel")
+    window.show_settings(management=True)
+    assert window.active_exam_screen is not None
+    assert isinstance(window._dynamic_page, ExamScreen)
+    monkeypatch.setattr(window, "_ask_active_exam_exit", lambda: "discard")
+    window.show_settings(management=True)
+    assert window.active_exam_screen is None
+    assert isinstance(window._dynamic_page, SettingsScreen)
+    assert window._dynamic_page.tabs.currentWidget() is window._management_panel()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_existing_subject_import_cancel_keeps_files(tmp_path: Path, monkeypatch) -> None:
+    from app.ui.data_import_dialog import DataImportDialog
+
+    data = tmp_path / "DATA"
+    subject_path = data / "AIL303m"
+    subject_path.mkdir(parents=True)
+    (subject_path / "keep.txt").write_text("old", encoding="utf-8")
+    database = Database(tmp_path / "import-guard.sqlite3")
+    database.set_setting("data_dir", str(data))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    window.show_data_import()
+    dialog = window._data_import_dialog
+    assert isinstance(dialog, DataImportDialog)
+    code = "1r82uwHDR7LVfpVv74W75OZ6xWh-2odrP"
+    monkeypatch.setattr(QMessageBox, "exec_", lambda _self: 0)
+    window._start_data_install(code)
+    assert window._data_install_task is None
+    assert (subject_path / "keep.txt").read_text(encoding="utf-8") == "old"
+    assert "Đã hủy" in dialog.status_label.text()
+    dialog.reject()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_delete_restores_files_when_database_sync_fails(tmp_path: Path, monkeypatch) -> None:
+    from PyQt5.QtWidgets import QInputDialog
+
+    subject = make_subject(tmp_path, 1)
+    database = Database(tmp_path / "rollback-delete.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    window.show_subject_management()
+    original_sync = database.sync_questions
+    calls = 0
+
+    def fail_once(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("database unavailable")
+        return original_sync(*args)
+
+    monkeypatch.setattr(database, "sync_questions", fail_once)
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_args: (subject.name, True))
+    window._delete_subject(subject.name)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert subject.path.is_dir()
+    assert subject.name in window.subjects
+    assert "đã khôi phục" in window._management_panel().status_label.text()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_replace_restores_files_when_database_sync_fails(tmp_path: Path, monkeypatch) -> None:
+    from app.services.data_package_installer import DataInstallResult
+    from app.services.subject_management import SubjectManager
+
+    subject = make_subject(tmp_path, 1)
+    (subject.path / "old.txt").write_text("original", encoding="utf-8")
+    database = Database(tmp_path / "rollback-replace.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    backup = SubjectManager(tmp_path / "DATA").remove(subject.name)
+    subject.path.mkdir()
+    (subject.path / "new.txt").write_text("new", encoding="utf-8")
+    original_sync = database.sync_questions
+    calls = 0
+
+    def fail_once(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("database unavailable")
+        return original_sync(*args)
+
+    monkeypatch.setattr(database, "sync_questions", fail_once)
+    window._data_install_completed(
+        DataInstallResult(subject.name, subject.path, 1, "a" * 64, backup)
+    )
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert (subject.path / "old.txt").read_text(encoding="utf-8") == "original"
+    assert not (subject.path / "new.txt").exists()
+    assert subject.name in window.subjects
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
 
 
 def test_history_tree_groups_subjects_formats_local_time_and_selects_only_exams() -> (

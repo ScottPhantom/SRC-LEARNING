@@ -143,6 +143,15 @@ QTableWidget#weakQuestionTable QHeaderView::section {
 }
 QDialog#questionBankNotificationDialog { background: #edf2f8; color: #172033; }
 QDialog#dataImportDialog { background: #edf2f8; color: #172033; }
+QTabWidget#settingsTabs::pane { background: #ffffff; border: 1px solid #dce2ec; border-radius: 12px; top: -2px; }
+QTabWidget#settingsTabs QTabBar::tab { background: #e8edf5; color: #334155; border: 2px solid #dce2ec; border-bottom: 0; border-top-left-radius: 10px; border-top-right-radius: 10px; min-width: 150px; min-height: 44px; padding: 0 20px; margin-right: 6px; font-size: 14px; font-weight: 700; }
+QTabWidget#settingsTabs QTabBar::tab:selected { background: #ffffff; color: #0A84FF; border-color: #dce2ec; }
+QTabWidget#settingsTabs QTabBar::tab:focus { border-color: #0A84FF; }
+QWidget#subjectManagementPanel { background: #ffffff; color: #172033; }
+QLabel#subjectManagementTitle { font-size: 22px; font-weight: 800; }
+QTableWidget#subjectManagementTable { background: #ffffff; color: #172033; border: 1px solid #dce2ec; border-radius: 8px; gridline-color: #e5e9f0; selection-background-color: #dbeafe; selection-color: #172033; }
+QTableWidget#subjectManagementTable:focus { border: 2px solid #0A84FF; }
+QTableWidget#subjectManagementTable QHeaderView::section { background: #eef2f7; color: #334155; border: 0; border-bottom: 1px solid #cbd5e1; padding: 7px; font-weight: 800; }
 QFrame#dataImportCard {
   background: #ffffff; border: 1px solid #dce2ec; border-radius: 18px;
 }
@@ -464,6 +473,15 @@ QTableWidget#weakQuestionTable QHeaderView::section {
 }
 QDialog#questionBankNotificationDialog { background: #0F1117; color: #F5F5F7; }
 QDialog#dataImportDialog { background: #0F1117; color: #F5F5F7; }
+QTabWidget#settingsTabs::pane { background: #171A21; border: 1px solid #343844; border-radius: 12px; top: -2px; }
+QTabWidget#settingsTabs QTabBar::tab { background: #1B202A; color: #CBD5E1; border: 2px solid #343844; border-bottom: 0; border-top-left-radius: 10px; border-top-right-radius: 10px; min-width: 150px; min-height: 44px; padding: 0 20px; margin-right: 6px; font-size: 14px; font-weight: 700; }
+QTabWidget#settingsTabs QTabBar::tab:selected { background: #171A21; color: #60A5FA; border-color: #343844; }
+QTabWidget#settingsTabs QTabBar::tab:focus { border-color: #60A5FA; }
+QWidget#subjectManagementPanel { background: #171A21; color: #F5F5F7; }
+QLabel#subjectManagementTitle { font-size: 22px; font-weight: 800; }
+QTableWidget#subjectManagementTable { background: #171A21; color: #F5F5F7; border: 1px solid #343844; border-radius: 8px; gridline-color: #343844; selection-background-color: #1e3a5f; selection-color: #ffffff; }
+QTableWidget#subjectManagementTable:focus { border: 2px solid #60A5FA; }
+QTableWidget#subjectManagementTable QHeaderView::section { background: #273345; color: #cbd5e1; border: 0; border-bottom: 1px solid #4b5563; padding: 7px; font-weight: 800; }
 QFrame#dataImportCard {
   background: #171A21; border: 1px solid #343844; border-radius: 18px;
 }

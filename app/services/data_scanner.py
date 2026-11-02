@@ -8,6 +8,7 @@ from PIL import Image, UnidentifiedImageError
 
 from app.config import CATEGORIES, IMAGE_EXTENSIONS
 from app.domain.models import Question, Subject
+from app.services.subject_management import inspect_tree
 
 
 class DataScannerService:
@@ -19,9 +20,11 @@ class DataScannerService:
             return []
         subjects: list[Subject] = []
         for subject_dir in sorted(
-            (p for p in self.data_dir.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            (p for p in self.data_dir.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith(".")),
             key=lambda p: p.name.casefold(),
         ):
+            if inspect_tree(subject_dir)[2]:
+                continue
             subjects.append(self._scan_subject(subject_dir))
         return subjects
 
@@ -29,13 +32,14 @@ class DataScannerService:
         subject = Subject(name=subject_dir.name, path=subject_dir)
         for category in CATEGORIES:
             category_dir = subject_dir / category
-            if not category_dir.is_dir():
+            if category_dir.is_symlink() or not category_dir.is_dir():
                 continue
             candidates = sorted(
                 (
                     path
                     for path in category_dir.iterdir()
                     if path.is_file()
+                    and not path.is_symlink()
                     and not path.name.startswith(".")
                     and path.suffix.lower() in IMAGE_EXTENSIONS
                 ),

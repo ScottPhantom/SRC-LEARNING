@@ -4,11 +4,9 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import stat
 import tempfile
 import threading
-import time
 import zipfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -21,6 +19,7 @@ from tqdm import tqdm
 from app.config import CATEGORIES, IMAGE_EXTENSIONS
 from app.repositories.answer_key import AnswerKeyRepository
 from app.services.data_scanner import DataScannerService
+from app.services.subject_management import SubjectManagementError, SubjectManager
 
 ProgressCallback = Callable[[str, int, str], None]
 DownloadFunction = Callable[[str, Path, int, ProgressCallback], Path]
@@ -61,6 +60,7 @@ class DataInstallResult:
     destination: Path
     question_count: int
     archive_sha256: str
+    backup_path: Path | None = None
 
 
 class DataPackageCatalog:
@@ -68,7 +68,7 @@ class DataPackageCatalog:
         self._by_file_id = {package.file_id: package for package in packages}
 
     @classmethod
-    def bundled(cls) -> "DataPackageCatalog":
+    def bundled(cls) -> DataPackageCatalog:
         manifest = resources.files("app.resources").joinpath("data_manifest.json")
         with manifest.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -129,8 +129,15 @@ class DataPackageInstaller:
         report = progress or (lambda _stage, _percent, _message: None)
         package = self.catalog.resolve(code)
         data_dir = Path(data_dir).expanduser().resolve()
-        data_dir.mkdir(parents=True, exist_ok=True)
-        destination = data_dir / package.subject
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise DataPackageError(f"Không tạo được thư mục DATA: {exc}") from exc
+        manager = SubjectManager(data_dir)
+        try:
+            destination = manager.destination(package.subject, require_existing=False)
+        except SubjectManagementError as exc:
+            raise DataPackageError(str(exc)) from exc
         if (destination.exists() or destination.is_symlink()) and not replace_existing:
             raise ExistingSubjectError(
                 f"Môn {package.subject} đã tồn tại. Hãy xác nhận trước khi thay thế."
@@ -159,13 +166,15 @@ class DataPackageInstaller:
             source, question_count = self._validate_subject(
                 extract_root, package.subject, report
             )
-            self._atomic_install(source, destination, replace_existing)
+            report("install", 0, "Đang chuyển dữ liệu đã xác minh vào DATA…")
+            backup_path = self._atomic_install(source, destination, replace_existing)
             report("complete", 100, f"Đã cài đặt {package.subject} thành công.")
             return DataInstallResult(
                 subject=package.subject,
                 destination=destination,
                 question_count=question_count,
                 archive_sha256=digest,
+                backup_path=backup_path,
             )
 
     @staticmethod
@@ -355,31 +364,40 @@ class DataPackageInstaller:
         progress("validate", 100, f"Đã xác minh {subject.question_count} câu hỏi.")
         return subject.path, subject.question_count
 
-    @staticmethod
     def _atomic_install(
-        source: Path, destination: Path, replace_existing: bool
-    ) -> None:
-        backup = destination.with_name(
-            f".{destination.name}.backup-{os.getpid()}-{time.time_ns()}"
-        )
+        self, source: Path, destination: Path, replace_existing: bool
+    ) -> Path | None:
+        manager = SubjectManager(destination.parent)
+        try:
+            manager.destination(destination.name, require_existing=False)
+        except SubjectManagementError as exc:
+            raise DataPackageError(str(exc)) from exc
         had_existing = destination.exists() or destination.is_symlink()
         if had_existing and not replace_existing:
             raise ExistingSubjectError(
                 f"Môn {destination.name} đã tồn tại. Hãy xác nhận trước khi thay thế."
             )
         try:
-            if had_existing:
+            backup = manager.reserve_recovery_path(destination.name) if had_existing else None
+        except SubjectManagementError as exc:
+            raise DataPackageError(str(exc)) from exc
+        try:
+            if backup is not None:
                 os.replace(destination, backup)
             os.replace(source, destination)
-        except Exception:
-            if had_existing and backup.exists() and not destination.exists():
-                os.replace(backup, destination)
-            raise
-        else:
-            if backup.is_symlink() or backup.is_file():
-                backup.unlink(missing_ok=True)
-            elif backup.is_dir():
-                shutil.rmtree(backup)
+        except OSError as exc:
+            if backup is not None and backup.exists():
+                try:
+                    if destination.exists():
+                        os.replace(destination, source)
+                    os.replace(backup, destination)
+                except OSError as rollback_exc:
+                    raise DataPackageError(
+                        f"Thay thế thất bại; bản cũ còn tại {backup}. "
+                        f"Không thể tự khôi phục: {rollback_exc}"
+                    ) from exc
+            raise DataPackageError(f"Không thể cài đặt môn học: {exc}") from exc
+        return backup
 
 
 def package_from_mapping(item: Mapping[str, object]) -> DataPackageSpec:

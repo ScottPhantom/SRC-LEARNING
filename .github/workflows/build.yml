@@ -3,6 +3,8 @@ name: Build and test SRC Learning
 on:
   workflow_dispatch:
   push:
+    branches:
+      - local/ver2.1-integration
     tags:
       - "v*"
 
@@ -53,6 +55,20 @@ jobs:
 
       - name: Build Core application
         run: python -m PyInstaller --clean --noconfirm ${{ matrix.spec_file }}
+
+      - name: Smoke test Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $app = Start-Process -FilePath "dist/LuyenThiHinhAnh.exe" -PassThru
+          Start-Sleep -Seconds 10
+          $app.Refresh()
+          if ($app.HasExited) {
+            throw "Windows app exited during startup (exit code: $($app.ExitCode))."
+          }
+          Stop-Process -Id $app.Id
 
       - name: Upload platform artifact
         uses: actions/upload-artifact@v4
