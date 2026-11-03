@@ -25,8 +25,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.config import APP_NAME, DEFAULT_DATA_DIR
-from app.controllers.data_install_worker import DataInstallTask
+from app.config import APP_NAME, DEFAULT_DATA_DIR, STATE_DIR, catalog_csv_url
+from app.controllers.data_install_worker import CatalogRefreshTask, DataInstallTask
 from app.controllers.scan_worker import ScanTask
 from app.domain.models import AppSettings, ExamConfig, Subject
 from app.repositories.answer_key import AnswerKeyReport, AnswerKeyRepository
@@ -38,6 +38,7 @@ from app.services.data_package_installer import (
     DataPackageInstaller,
 )
 from app.services.exam import ExamResult, ExamService, ExamSession
+from app.services.package_catalog_source import CatalogLoadResult, PackageCatalogSource
 from app.services.question_bank_updates import (
     PENDING_ANSWERS_FILE,
     BankUpdateResult,
@@ -125,6 +126,11 @@ class MainWindow(QMainWindow):
         self._bank_update_dialog: QuestionBankNotificationDialog | None = None
         self._data_import_dialog: DataImportDialog | None = None
         self._data_install_task: DataInstallTask | None = None
+        self._catalog_task: CatalogRefreshTask | None = None
+        self._pending_import_code: str | None = None
+        self._catalog_source = PackageCatalogSource(
+            catalog_csv_url(), STATE_DIR / "package_catalog.csv"
+        )
         self._data_package_installer = DataPackageInstaller()
         self.theme_manager = ThemeManager(QApplication.instance())
         self._apply_theme(self.settings.theme)
@@ -404,12 +410,48 @@ class MainWindow(QMainWindow):
 
     def _start_data_install(self, code: str) -> None:
         dialog = self._data_import_dialog
-        if dialog is None or self._data_install_task is not None:
+        if dialog is None or self._data_install_task is not None or self._catalog_task is not None:
+            return
+        try:
+            self._data_package_installer.catalog.extract_file_id(code)
+        except DataPackageError as exc:
+            dialog.show_error(str(exc))
+            return
+        self._pending_import_code = code
+        dialog.set_running(True)
+        dialog.update_progress("catalog", 0, "Đang kiểm tra danh mục môn học…")
+        task = CatalogRefreshTask(self._catalog_source)
+        task.signals.completed.connect(self._catalog_ready)
+        task.signals.failed.connect(self._catalog_failed)
+        self._catalog_task = task
+        self.thread_pool.start(task)
+
+    def _catalog_ready(self, result: CatalogLoadResult) -> None:
+        self._catalog_task = None
+        code = self._pending_import_code
+        self._pending_import_code = None
+        dialog = self._data_import_dialog
+        if self._closing or dialog is None or code is None:
+            return
+        self._data_package_installer.catalog = result.catalog
+        dialog.set_running(False)
+        self._proceed_data_install(code, result.warning)
+
+    def _catalog_failed(self, message: str) -> None:
+        self._catalog_task = None
+        self._pending_import_code = None
+        dialog = self._data_import_dialog
+        if dialog is not None and not self._closing:
+            dialog.show_error(message)
+
+    def _proceed_data_install(self, code: str, warning: str = "") -> None:
+        dialog = self._data_import_dialog
+        if dialog is None:
             return
         try:
             package = self._data_package_installer.catalog.resolve(code)
         except DataPackageError as exc:
-            dialog.show_error(str(exc))
+            dialog.show_error(f"{warning} {exc}".strip())
             return
 
         try:
@@ -897,6 +939,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "Đang cài đặt môn học",
                 "Hãy đợi quá trình tải và cài đặt hoàn tất trước khi đóng ứng dụng.",
+            )
+            event.ignore()
+            return
+        if self._catalog_task is not None:
+            QMessageBox.information(
+                self, "Đang cập nhật danh mục",
+                "Hãy đợi ứng dụng kiểm tra danh mục môn học xong trước khi đóng.",
             )
             event.ignore()
             return

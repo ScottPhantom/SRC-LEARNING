@@ -27,6 +27,7 @@ backups/
 .env
 .env.*
 !.env.example
+catalog_source_url.txt
 *.pem
 *.key
 credentials*

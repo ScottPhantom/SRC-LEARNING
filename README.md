@@ -128,6 +128,36 @@ Người dùng vẫn có thể đổi thư mục dữ liệu trong phần Cài �
 tồn tại, người dùng phải xác nhận thay thế. Dữ liệu cũ được giữ nguyên khi tải,
 checksum, giải nén hoặc xác minh thất bại.
 
+Danh mục trực tuyến do chủ dự án quản lý trong tab `GOOGLE_IDS` của Google Sheet
+`SRC_APP`. Chỉ những dòng có cột `App manifest` bằng chính xác `Đã bật` mới
+được app chấp nhận. Mỗi dòng được bật phải có Google file ID, SHA-256 ZIP,
+kích thước byte và số câu đúng với gói thực tế. App tải bản CSV đã **xuất bản
+riêng cho tab này**, không dùng URL chỉnh sửa Sheet hoặc thông tin đăng nhập
+Google của người dùng. Khi không tải được CSV, app dùng bản danh mục hợp lệ đã
+lưu gần nhất; nếu chưa có, app chỉ nhận các gói trong manifest đóng kèm. Bản
+CSV hợp lệ mới thay thế bản lưu cũ, còn dữ liệu sai không được ghi đè. Việc tắt
+một môn trên Sheet chỉ có hiệu lực ngay với thiết bị tải được danh mục mới;
+thiết bị offline vẫn có thể dùng danh mục đã lưu đến lần kết nối tiếp theo.
+
+URL CSV công khai của riêng tab `GOOGLE_IDS` (`gid=105`) đã được tích hợp làm
+nguồn mặc định cho các bản build mới. Nếu về sau phải đổi URL xuất bản, đặt tệp
+`catalog_source_url.txt` **cạnh file `.exe`**, chứa duy nhất URL CSV mới để
+không cần tạo lại `.exe`. Khi phát triển có thể dùng biến môi trường
+`SRC_LEARNING_CATALOG_CSV_URL` thay cho tệp này. Nếu không tải được nguồn
+trực tuyến, app dùng bản hợp lệ đã lưu từ trước hoặc manifest đi kèm.
+URL chỉnh sửa Sheet hoặc URL export của Sheet riêng tư không dùng được; trên
+máy người dùng URL phải tải được CSV mà không đăng nhập Google. Chỉ cần đặt
+tệp URL cạnh `.exe` khi muốn ghi đè nguồn mặc định; việc thêm môn về sau chỉ
+cần cập nhật Sheet, không cần tạo lại `.exe`. Cơ chế này chỉ có trong bản `.exe`
+được build **sau thay đổi này**; artifact VER_01 đã phát hành trước đó vẫn cần
+được thay một lần.
+
+Không chọn xuất bản toàn bộ `SRC_APP`: các tab câu hỏi/đáp án không cần công
+khai. Bất kỳ cột nào trong `GOOGLE_IDS`, kể cả ghi chú, đều có thể được xem qua
+URL CSV đã xuất bản. Trước khi bật một dòng mới, cần duyệt dữ liệu, kiểm tra
+ZIP không đăng nhập, SHA-256, số câu và khả năng đọc đáp án trong app. Sau khi
+chỉnh Sheet, nội dung CSV công khai có thể mất vài phút mới cập nhật.
+
 ### Quản lý môn học
 
 Trên Home, chọn **Cài đặt → Quản lý môn học** để xem các môn trong thư mục DATA, số câu,

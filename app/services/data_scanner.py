@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import re
 import unicodedata
 from pathlib import Path
 
@@ -30,6 +32,7 @@ class DataScannerService:
 
     def _scan_subject(self, subject_dir: Path) -> Subject:
         subject = Subject(name=subject_dir.name, path=subject_dir)
+        option_letters = self._read_option_letters(subject_dir)
         for category in CATEGORIES:
             category_dir = subject_dir / category
             if category_dir.is_symlink() or not category_dir.is_dir():
@@ -64,6 +67,25 @@ class DataScannerService:
                         category=category,
                         relative_path=relative,
                         absolute_path=image_path,
+                        option_letters=option_letters.get(relative, ()),
                     )
                 )
         return subject
+
+    @staticmethod
+    def _read_option_letters(subject_dir: Path) -> dict[str, tuple[str, ...]]:
+        """Read optional per-image choices; old banks retain their A-D default."""
+        metadata = subject_dir / "question_metadata.csv"
+        if not metadata.is_file() or metadata.is_symlink():
+            return {}
+        result: dict[str, tuple[str, ...]] = {}
+        with metadata.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not {"image_name", "option_letters"}.issubset(reader.fieldnames or []):
+                return {}
+            for row in reader:
+                relative = unicodedata.normalize("NFC", (row["image_name"] or "").strip())
+                letters = (row["option_letters"] or "").strip().upper()
+                if re.fullmatch(r"A(?:B(?:C(?:D(?:E(?:F(?:G(?:H)?)?)?)?)?)?)?", letters):
+                    result[relative] = tuple(letters)
+        return result

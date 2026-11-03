@@ -35,6 +35,7 @@ from app.repositories.answer_key import AnswerKeyReport
 from app.repositories.database import Database
 from app.services.data_scanner import DataScannerService
 from app.services.exam import ExamService
+from app.services.package_catalog_source import PackageCatalogSource
 from app.services.study import CrammingService, FlashcardService
 from app.services.subject_management import SubjectInfo
 from app.ui import themes
@@ -1677,6 +1678,26 @@ def test_answer_grid_supports_a_to_h_hints_and_multiple_toggle(tmp_path: Path) -
     widget.deleteLater()
 
 
+def test_single_choice_fifth_option_can_be_selected_and_graded(tmp_path: Path) -> None:
+    question = Question(
+        id="five-options",
+        subject="SSG105",
+        category="Selections_1_choose",
+        relative_path="Selections_1_choose/Q107.png",
+        absolute_path=tmp_path / "Q107.png",
+        option_letters=tuple("ABCDE"),
+    )
+    widget = AnswerOptionsWidget()
+    widget.set_question(question)
+    assert widget.toggle_option("E")
+    assert widget.selected_answer() == "E"
+    assert widget.toggle_option("A")
+    assert widget.selected_answer() == "A"
+    widget.show_feedback(question, "E", "E")
+    assert widget.option_widgets[4].property("answerState") == "correct"
+    widget.deleteLater()
+
+
 def test_exam_keymap_toggles_single_choice_and_grid_navigates(tmp_path: Path) -> None:
     subject = make_subject(tmp_path, 3)
     database = Database(tmp_path / "exam-keymap.sqlite3")
@@ -2069,9 +2090,46 @@ def test_existing_subject_import_cancel_keeps_files(tmp_path: Path, monkeypatch)
     code = "1r82uwHDR7LVfpVv74W75OZ6xWh-2odrP"
     monkeypatch.setattr(QMessageBox, "exec_", lambda _self: 0)
     window._start_data_install(code)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
     assert window._data_install_task is None
     assert (subject_path / "keep.txt").read_text(encoding="utf-8") == "old"
     assert "Đã hủy" in dialog.status_label.text()
+    dialog.reject()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_import_checks_new_code_from_remote_catalog(tmp_path: Path, monkeypatch) -> None:
+    data = tmp_path / "DATA"
+    subject_path = data / "CPV301"
+    subject_path.mkdir(parents=True)
+    (subject_path / "keep.txt").write_text("old", encoding="utf-8")
+    database = Database(tmp_path / "remote-catalog.sqlite3")
+    database.set_setting("data_dir", str(data))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    csv_data = (
+        "Môn,Google file ID,Số câu,SHA-256 ZIP,Kích thước (byte),App manifest\n"
+        f"CPV301,new-approved-drive-id,89,{'a' * 64},21423181,Đã bật\n"
+    ).encode()
+    window._catalog_source = PackageCatalogSource(
+        "https://docs.google.com/spreadsheets/d/e/example/pub?gid=105&output=csv",
+        tmp_path / "catalog.csv",
+        fetch=lambda _url: csv_data,
+    )
+    window.show_data_import()
+    dialog = window._data_import_dialog
+    assert dialog is not None
+    monkeypatch.setattr(QMessageBox, "exec_", lambda _self: 0)
+    window._start_data_install("new-approved-drive-id")
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert window._data_package_installer.catalog.resolve("new-approved-drive-id").subject == "CPV301"
+    assert "Đã hủy" in dialog.status_label.text()
+    assert (subject_path / "keep.txt").read_text(encoding="utf-8") == "old"
     dialog.reject()
     window.close()
     window.thread_pool.waitForDone(2000)

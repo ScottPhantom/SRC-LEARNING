@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -52,6 +54,7 @@ class DataPackageSpec:
     sha256: str
     archive_size: int
     enabled: bool = True
+    expected_questions: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +87,51 @@ class DataPackageCatalog:
             )
             for item in payload.get("packages", [])
         ]
+        return cls(packages)
+
+    @classmethod
+    def from_sheet_csv(cls, content: bytes) -> DataPackageCatalog:
+        """Read only approved packages from the published GOOGLE_IDS tab."""
+        try:
+            decoded = content.decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(decoded))
+            required = {
+                "Môn", "Google file ID", "Số câu", "SHA-256 ZIP",
+                "Kích thước (byte)", "App manifest",
+            }
+            if not required.issubset(reader.fieldnames or []):
+                raise ValueError("Thiếu cột danh mục bắt buộc")
+            packages: list[DataPackageSpec] = []
+            subjects: set[str] = set()
+            ids: set[str] = set()
+            for row in reader:
+                if (row.get("App manifest") or "").strip() != "Đã bật":
+                    continue
+                subject = (row["Môn"] or "").strip()
+                file_id = (row["Google file ID"] or "").strip()
+                digest = (row["SHA-256 ZIP"] or "").strip().lower()
+                size = int((row["Kích thước (byte)"] or "").strip())
+                question_count = int((row["Số câu"] or "").strip())
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", subject):
+                    raise ValueError(f"Mã môn không hợp lệ: {subject}")
+                if not DRIVE_ID_PATTERN.fullmatch(file_id):
+                    raise ValueError(f"Google file ID không hợp lệ: {subject}")
+                if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise ValueError(f"SHA-256 không hợp lệ: {subject}")
+                if not 0 < size <= MAX_UNCOMPRESSED_BYTES or question_count <= 0:
+                    raise ValueError(f"Kích thước hoặc số câu không hợp lệ: {subject}")
+                if subject in subjects or file_id in ids:
+                    raise ValueError("Danh mục có mã môn hoặc Google file ID trùng lặp")
+                subjects.add(subject)
+                ids.add(file_id)
+                packages.append(
+                    DataPackageSpec(
+                        subject, file_id, digest, size,
+                        expected_questions=question_count,
+                    )
+                )
+        except (UnicodeError, csv.Error, TypeError, ValueError) as exc:
+            raise DataPackageError(f"Danh mục môn học không hợp lệ: {exc}") from exc
         return cls(packages)
 
     @staticmethod
@@ -154,6 +202,10 @@ class DataPackageInstaller:
             )
             if not downloaded.is_file():
                 raise DataPackageError("Google Drive không trả về tệp dữ liệu hợp lệ.")
+            if downloaded.stat().st_size != package.archive_size:
+                raise DataPackageError(
+                    f"Kích thước gói {package.subject} không khớp danh mục."
+                )
 
             digest = self._sha256(downloaded, report)
             if digest != package.sha256:
@@ -166,6 +218,11 @@ class DataPackageInstaller:
             source, question_count = self._validate_subject(
                 extract_root, package.subject, report
             )
+            if package.expected_questions is not None and question_count != package.expected_questions:
+                raise DataPackageError(
+                    f"Số câu của gói {package.subject} không khớp danh mục "
+                    f"({question_count}/{package.expected_questions})."
+                )
             report("install", 0, "Đang chuyển dữ liệu đã xác minh vào DATA…")
             backup_path = self._atomic_install(source, destination, replace_existing)
             report("complete", 100, f"Đã cài đặt {package.subject} thành công.")

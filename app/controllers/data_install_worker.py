@@ -9,12 +9,40 @@ from app.services.data_package_installer import (
     DataPackageError,
     DataPackageInstaller,
 )
+from app.services.package_catalog_source import PackageCatalogSource
 
 
 class DataInstallSignals(QObject):
     progress = pyqtSignal(str, int, str)
     completed = pyqtSignal(object)
     failed = pyqtSignal(str)
+
+
+class CatalogRefreshSignals(QObject):
+    completed = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+
+class CatalogRefreshTask(QRunnable):
+    def __init__(self, source: PackageCatalogSource):
+        super().__init__()
+        self.source = source
+        self.signals = CatalogRefreshSignals()
+
+    @pyqtSlot()
+    def run(self) -> None:
+        try:
+            result = self.source.load()
+        except (DataPackageError, OSError, RuntimeError, ValueError) as exc:
+            try:
+                self.signals.failed.emit(f"Không đọc được danh mục môn học: {exc}")
+            except RuntimeError:
+                pass
+            return
+        try:
+            self.signals.completed.emit(result)
+        except RuntimeError:
+            pass
 
 
 class DataInstallTask(QRunnable):

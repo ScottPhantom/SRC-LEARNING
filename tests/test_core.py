@@ -51,6 +51,20 @@ def test_scanner_handles_unicode_and_categories(tmp_path: Path) -> None:
     assert len({q.id for q in subjects[0].questions}) == 4
 
 
+def test_scanner_reads_fifth_option_from_optional_metadata(tmp_path: Path) -> None:
+    subject = make_questions(tmp_path / "DATA", 2)
+    image_names = [q.relative_path for q in subject.questions]
+    with (subject.path / "question_metadata.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "option_letters"])
+        writer.writerow([image_names[0], "ABCDE"])
+    scanned = DataScannerService(tmp_path / "DATA").scan()[0]
+    assert scanned.questions[0].options == tuple("ABCDE")
+    assert scanned.questions[1].options == tuple("ABCD")
+    assert AnswerKeyRepository.validate(scanned.questions[0], "E")
+    assert not AnswerKeyRepository.validate(scanned.questions[1], "E")
+
+
 def test_answer_key_load_validate_and_report(tmp_path: Path) -> None:
     data = tmp_path / "DATA"
     subject = make_questions(data, 2)
