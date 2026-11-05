@@ -66,6 +66,21 @@ def test_notebook_ui_covers_three_modes_and_crops_image(tmp_path: Path) -> None:
     with Image.open(io.BytesIO(question_image(question.absolute_path))) as cropped:
         assert cropped.size == (100, 90)
 
+    session.database.record_question_attempt(question.id, correct=False)
+    ui._render()
+    next(child for row in ui.body.children for child in getattr(row, "children", ())
+         if isinstance(child, widgets.Button) and child.description == "Ôn câu sai nhiều").click()
+    assert ui.quick_reviews is not None and not ui.quick_ratable
+    next(child for row in ui.body.children for child in getattr(row, "children", ())
+         if isinstance(child, widgets.Button) and child.description == "Đóng ôn tập").click()
+    next(child for row in ui.body.children for child in getattr(row, "children", ())
+         if isinstance(child, widgets.Button) and child.description == "Ôn câu mới/chưa thuộc").click()
+    assert ui.quick_reviews is not None and ui.quick_ratable
+    next(child for row in ui.body.children for child in getattr(row, "children", ())
+         if isinstance(child, widgets.Button) and child.description == "Đã thuộc").click()
+    assert session.database.card_stats("DEMO101")["known"] == 1
+    ui._close_quick()
+
     ui.mode.value = "cram"
     assert ui.cram is not None
     control = next(child for child in ui.body.children if isinstance(child, widgets.RadioButtons))

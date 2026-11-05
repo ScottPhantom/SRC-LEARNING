@@ -14,6 +14,7 @@ from PIL import Image
 
 from app.config import CATEGORY_LABELS, DEFAULT_MASK_REGION
 from app.domain.models import ExamConfig, FeedbackMode, Question
+from app.services.adaptive import AdaptiveReviewService
 from app.services.exam import ExamResult, ExamService, ExamSession
 from app.services.study import CrammingService, FlashcardService
 from colab_mobile.session import MobileLearningSession
@@ -39,6 +40,9 @@ class NotebookLearningUI:
     def __init__(self, session: MobileLearningSession | None = None) -> None:
         self.session = session or MobileLearningSession()
         self.flash: FlashcardService | None = None
+        self.quick_reviews: list | None = None
+        self.quick_index = 0
+        self.quick_ratable = False
         self.cram: CrammingService | None = None
         self.exam: ExamSession | None = None
         self.exam_result: ExamResult | None = None
@@ -98,6 +102,7 @@ class NotebookLearningUI:
     def _change_subject(self, change: dict) -> None:
         if change["new"] != change["old"]:
             self.flash = None
+            self.quick_reviews = None
             self.cram = None
             self.exam = None
             self.exam_result = None
@@ -130,6 +135,9 @@ class NotebookLearningUI:
             self._render_exam(subject, report.answers)
 
     def _render_flash(self, subject, answers) -> None:
+        if self.quick_reviews is not None:
+            self._render_quick_review()
+            return
         if self.flash is None:
             self.flash = FlashcardService(self.session.database, subject.questions, answers)
             self.flash.resume_or_start()
@@ -140,18 +148,29 @@ class NotebookLearningUI:
         )
         restart = widgets.Button(description="Học lại tất cả")
         restart.on_click(lambda _: (self.flash.restart(), self._render()))
-        review = widgets.Button(description="Ôn câu chưa thuộc", disabled=stats["learning"] == 0)
+        adaptive = AdaptiveReviewService(self.session.database, subject.questions, answers)
+        learning_entries = [entry for group in adaptive.learning_by_category().values() for entry in group]
+        weak_entries = [entry for group in adaptive.top_errors_by_category().values() for entry in group]
+        review_learning = widgets.Button(
+            description="Ôn câu mới/chưa thuộc", disabled=not learning_entries
+        )
+        review_weak = widgets.Button(
+            description="Ôn câu sai nhiều", disabled=not weak_entries
+        )
 
-        def start_review(_):
-            try:
-                self.flash.start_new(only_learning=True)
-                self._render()
-            except ValueError as exc:
-                self._message(str(exc), error=True)
+        def open_review(entries: list, ratable: bool) -> None:
+            self.quick_reviews = list(entries)
+            self.quick_index = 0
+            self.quick_ratable = ratable
+            self._render()
 
-        review.on_click(start_review)
+        review_learning.on_click(lambda _: open_review(learning_entries, True))
+        review_weak.on_click(lambda _: open_review(weak_entries, False))
+        review_buttons = widgets.HBox(
+            [review_learning, review_weak], layout=widgets.Layout(flex_flow="row wrap")
+        )
         if state.completed or state.question is None:
-            self.body.children = (summary, widgets.HTML("Đã hết thẻ trong phiên này."), restart, review)
+            self.body.children = (summary, widgets.HTML("Đã hết thẻ trong phiên này."), restart, review_buttons)
             return
         answer = widgets.HTML()
         reveal = widgets.Button(description="Hiện đáp án")
@@ -164,8 +183,61 @@ class NotebookLearningUI:
             summary, widgets.HTML(f"Thẻ {state.position + 1}/{state.total}"),
             self._image(state.question), answer,
             widgets.HBox([reveal, known, learning], layout=widgets.Layout(flex_flow="row wrap")),
-            widgets.HBox([restart, review], layout=widgets.Layout(flex_flow="row wrap")),
+            restart, review_buttons,
         )
+
+    def _render_quick_review(self) -> None:
+        if not self.quick_reviews:
+            self.quick_reviews = None
+            self._render()
+            return
+        entry = self.quick_reviews[self.quick_index]
+        previous = widgets.Button(description="← Trước", disabled=self.quick_index == 0)
+        following = widgets.Button(
+            description="Tiếp →", disabled=self.quick_index == len(self.quick_reviews) - 1
+        )
+        close = widgets.Button(description="Đóng ôn tập")
+        previous.on_click(lambda _: self._move_quick(-1))
+        following.on_click(lambda _: self._move_quick(1))
+        close.on_click(lambda _: self._close_quick())
+        buttons = [previous, following, close]
+        if self.quick_ratable:
+            known = widgets.Button(description="Đã thuộc", button_style="success")
+            learning = widgets.Button(description="Chưa thuộc", button_style="warning")
+            known.on_click(lambda _: self._rate_quick(True))
+            learning.on_click(lambda _: self._rate_quick(False))
+            buttons = [known, learning, *buttons]
+        self.body.children = (
+            widgets.HTML(
+                f"<b>Quick Review</b> · {self.quick_index + 1}/{len(self.quick_reviews)}"
+            ),
+            self._image(entry.question),
+            widgets.HTML(f"<b>Đáp án: {html.escape(entry.correct_answer or 'Chưa có')}</b>"),
+            widgets.HBox(buttons, layout=widgets.Layout(flex_flow="row wrap")),
+        )
+
+    def _move_quick(self, offset: int) -> None:
+        self.quick_index = max(0, min(len(self.quick_reviews) - 1, self.quick_index + offset))
+        self._render()
+
+    def _close_quick(self) -> None:
+        self.quick_reviews = None
+        self._render()
+
+    def _rate_quick(self, known: bool) -> None:
+        entry = self.quick_reviews[self.quick_index]
+        self.session.database.rate_card(entry.question.id, known)
+        if known:
+            del self.quick_reviews[self.quick_index]
+            if self.quick_reviews:
+                self.quick_index = min(self.quick_index, len(self.quick_reviews) - 1)
+            else:
+                self.quick_reviews = None
+        elif self.quick_index == len(self.quick_reviews) - 1:
+            self.quick_reviews = None
+        else:
+            self.quick_index += 1
+        self._render()
 
     @staticmethod
     def _answer_input(question: Question):
