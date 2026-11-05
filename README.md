@@ -12,9 +12,9 @@ SRC LEARNING cung cấp ba chế độ:
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ScottPhantom/SRC-LEARNING/blob/Mobile_Web_APP/notebooks/SRC_LEARNING_Mobile_Web_APP.ipynb)
 
-Notebook clone nhánh `Mobile_Web_APP` từ GitHub, tải môn bằng Google Drive File ID đã được phê duyệt và mở Flash Cards, Học cấp tốc, Mock Exam bằng widget ngay trong notebook. Mỗi lần chạy ô khởi động tạo thư mục `DATA` và SQLite mới trên runtime Colab; tiến độ không đồng bộ với desktop và sẽ mất khi runtime bị xóa. Không cần GPU. Link trên chỉ dùng được sau khi nhánh này có mặt trên GitHub.
+Notebook clone đúng nhánh `Mobile_Web_APP`, cài thư viện riêng trong `requirements-mobile.txt`, rồi mở giao diện Streamlit ngay trong output Colab. Bố cục bám theo ứng dụng Desktop: thư viện môn học, ba thẻ chọn chế độ, vùng ảnh câu hỏi và bảng thao tác. Flash Cards, Học cấp tốc và Mock Exam dùng lại các service Python của Desktop. Nhập Google Drive File ID hoặc link chia sẻ đã được phê duyệt để tải môn. Mỗi runtime Colab tạo `DATA` và SQLite tạm mới; tiến độ không đồng bộ với Desktop và có thể mất khi runtime bị xóa. Không cần GPU. Link trên chỉ dùng được sau khi nhánh này có mặt trên GitHub.
 
-Đây là giao diện notebook riêng cho Safari, không phải giao diện PyQt5 hoặc ứng dụng Streamlit chạy qua tunnel. Xem hướng dẫn và giới hạn trong notebook trước khi tải dữ liệu môn học lên runtime Colab.
+Phiên bản Colab dùng Streamlit để tái tạo giao diện và cách học quen thuộc; mã PyQt5 Desktop không bị thay đổi. Bản mobile không cài PyQt5, OpenCV, pytesseract hoặc PyInstaller. Streamlit chạy trong runtime và được hiển thị bằng iframe notebook của Colab, không dùng tunnel. **Colab miễn phí có thể ngắt runtime khi dùng web UI; cách chạy này là thử nghiệm, không được bảo đảm ổn định hoặc luôn hoạt động trên Safari/iPad.** Xem giới hạn trong notebook trước khi tải dữ liệu môn học.
 
 Giao diện và thông báo sử dụng tiếng Việt. Tiến trình học, kết quả thi và thiết lập được lưu cục bộ trong `study_progress.sqlite3`.
 
