@@ -8,6 +8,14 @@ SRC LEARNING cung cấp ba chế độ:
 - **Học cấp tốc:** luyện theo vòng; câu trả lời sai quay lại cuối hàng đợi.
 - **Mock Exam:** tạo đề từ nhiều nhóm câu, giới hạn thời gian, chấm điểm và lưu lịch sử.
 
+## Chạy trên iPad bằng Google Colab (nhánh Mobile_Web_APP)
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ScottPhantom/SRC-LEARNING/blob/Mobile_Web_APP/notebooks/SRC_LEARNING_Mobile_Web_APP.ipynb)
+
+Notebook clone nhánh `Mobile_Web_APP` từ GitHub, tải môn bằng Google Drive File ID đã được phê duyệt và mở Flash Cards, Học cấp tốc, Mock Exam bằng widget ngay trong notebook. Mỗi lần chạy ô khởi động tạo thư mục `DATA` và SQLite mới trên runtime Colab; tiến độ không đồng bộ với desktop và sẽ mất khi runtime bị xóa. Không cần GPU. Link trên chỉ dùng được sau khi nhánh này có mặt trên GitHub.
+
+Đây là giao diện notebook riêng cho Safari, không phải giao diện PyQt5 hoặc ứng dụng Streamlit chạy qua tunnel. Xem hướng dẫn và giới hạn trong notebook trước khi tải dữ liệu môn học lên runtime Colab.
+
 Giao diện và thông báo sử dụng tiếng Việt. Tiến trình học, kết quả thi và thiết lập được lưu cục bộ trong `study_progress.sqlite3`.
 
 ## Yêu cầu hệ thống
