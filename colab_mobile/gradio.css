@@ -38,9 +38,12 @@ body, gradio-app, .gradio-container { background: radial-gradient(ellipse at 55%
 .gradio-container input, .gradio-container textarea, .gradio-container select { min-height: 50px; font-size: 1rem !important; }
 @media (max-width: 800px) {
   .gradio-container { padding: 12px 10px 30px !important; }
+  .gradio-container > .main { padding: 8px 0 24px !important; }
   .src-toolbar { flex-wrap: wrap; }
   .src-logo { width: 100%; }
   .src-icon-button { width: 62px !important; min-width: 62px !important; height: 62px !important; min-height: 62px !important; }
+  .src-subject-row { flex-direction: column !important; align-items: stretch !important; }
+  .src-subject-row > * { width: 100% !important; min-width: 0 !important; flex: none !important; }
   .src-question-row { flex-wrap: wrap; }
   .src-question-row > * { min-width: 100% !important; }
   .src-stats { grid-template-columns: repeat(3, 1fr); }

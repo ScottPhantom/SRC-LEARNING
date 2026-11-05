@@ -546,8 +546,8 @@ def launch_app(*, share: bool, prevent_thread_lock: bool = False):
     demo = create_app()
     _, local_url, share_url = demo.launch(
         server_name="127.0.0.1", share=share, inline=False,
-        prevent_thread_lock=prevent_thread_lock, css=css,
-        head=f"<script>{icons}</script>", footer_links=[], run_history=False,
+        prevent_thread_lock=prevent_thread_lock,
+        head=f"<style>{css}</style><script>{icons}</script>", footer_links=[], run_history=False,
     )
     return demo, local_url, share_url
 
