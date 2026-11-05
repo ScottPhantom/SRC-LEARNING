@@ -120,13 +120,33 @@ def image_view(question: Question) -> None:
 
 def answer_input(question: Question, key: str, selected: str = "", disabled: bool = False) -> str:
     options = list(question.options)
-    if question.is_multiple:
-        choices = st.multiselect("Chọn đáp án", options, default=list(selected), key=key, disabled=disabled)
-        return normalize_answer("".join(choices))
-    choices = ["— Chưa chọn —", *options]
-    index = choices.index(selected) if selected in choices else 0
-    value = st.radio("Chọn đáp án", choices, index=index, horizontal=True, key=key, disabled=disabled)
-    return "" if value == choices[0] else value
+    selection_key = f"{key}-selection"
+    if selection_key not in st.session_state:
+        st.session_state[selection_key] = normalize_answer(selected)
+    chosen = st.session_state[selection_key]
+    st.markdown("**Chọn các đáp án**" if question.is_multiple else "**Chọn đáp án**")
+    with st.container(key="src_answer_choices"):
+        for start in range(0, len(options), 2):
+            columns = st.columns(2)
+            for column, option in zip(columns, options[start:start + 2], strict=False):
+                with column:
+                    if st.button(
+                        option,
+                        key=f"{key}-option-{option}",
+                        type="primary" if option in chosen else "secondary",
+                        disabled=disabled,
+                        width="stretch",
+                    ):
+                        if question.is_multiple:
+                            st.session_state[selection_key] = normalize_answer(
+                                chosen.replace(option, "") if option in chosen else chosen + option
+                            )
+                        else:
+                            st.session_state[selection_key] = "" if option == chosen else option
+                        st.rerun()
+    if not disabled:
+        st.caption("Chạm lần nữa để bỏ chọn")
+    return st.session_state[selection_key]
 
 
 def home() -> None:
@@ -433,7 +453,7 @@ def cram() -> None:
     with side, st.container(border=True):
         selected = answer_input(
             question,
-            f"cram-{shown_cycle.cycle_id}-{question.id}",
+            f"cram-{shown_cycle.cycle_id}-{shown_cycle.current_round}-{question.id}",
             selected=pending[2] if pending else "",
             disabled=pending is not None,
         )
@@ -542,6 +562,8 @@ def exam() -> None:
     with side, st.container(border=True):
         key = f"exam-{id(exam)}-{exam.current_index}"
         selected = answer_input(item.question, key, item.selected_answer, disabled=item.confirmed)
+        if not item.confirmed:
+            exam.set_answer(selected)
         if item.confirmed:
             st.markdown(f'**Đáp án: {html.escape(item.question.correct_answer)}**')
         if exam.config.feedback_mode == FeedbackMode.IMMEDIATE and not item.confirmed:

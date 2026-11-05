@@ -47,8 +47,22 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {
   outline-offset: 2px;
 }
 .st-key-src_toolbar .stButton button[data-testid^="stBaseButton"] {
-  font-size: 1.45rem;
-  padding: .4rem;
+  font-size: 2.15rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: .25rem;
+}
+.st-key-src_toolbar .stButton button[data-testid^="stBaseButton"] [data-testid="stMarkdownContainer"] p {
+  font-size: 2.15rem !important;
+  line-height: 1 !important;
+}
+.st-key-src_answer_choices .stButton button[data-testid^="stBaseButton"] {
+  min-height: 68px;
+  font-size: 1.35rem;
+  border-width: 2px;
+}
+.st-key-src_answer_choices .stButton button[data-testid^="stBaseButton"] [data-testid="stMarkdownContainer"] p {
+  font-size: 1.35rem !important;
 }
 .stButton button[kind="primary"] {
   background: var(--src-blue);
@@ -120,7 +134,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {
   .src-logo { font-size: 1.15rem; }
   .src-card-icon { margin-top: .5rem; font-size: 3.5rem; }
   .stButton button[data-testid^="stBaseButton"] { min-height: 60px; font-size: 1.04rem; }
-  .st-key-src_toolbar .stButton button[data-testid^="stBaseButton"] { font-size: 1.45rem; }
+  .st-key-src_toolbar .stButton button[data-testid^="stBaseButton"] { font-size: 2.15rem; }
   [data-testid="stRadio"] label, [data-testid="stCheckbox"] label { min-height: 58px; }
 }
 @media (max-width: 600px) {

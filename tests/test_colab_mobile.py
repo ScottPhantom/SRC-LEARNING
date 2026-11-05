@@ -2,6 +2,7 @@
 from __future__ import annotations
 import csv
 import io
+import time
 from pathlib import Path
 from PIL import Image
 import pytest
@@ -99,9 +100,36 @@ def test_streamlit_cram_records_result_when_checked(tmp_path: Path) -> None:
     app.session_state["page"] = "cram"
     app.run(timeout=20)
     question = app.session_state["cram"].state().question
-    app.radio[0].set_value(question.correct_answer).run(timeout=20)
+    next(button for button in app.button if button.label == question.correct_answer).click().run(timeout=20)
     next(button for button in app.button if button.label == "Kiểm tra").click().run(timeout=20)
     assert not app.exception
     assert app.session_state["cram"].state().mastered == 1
     assert any(button.label == "Câu tiếp →" for button in app.button)
+    session.close()
+
+
+def test_streamlit_exam_answer_buttons_save_and_toggle(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    session = MobileLearningSession(tmp_path / "exam-ui", installer=FakeInstaller())
+    session.install_subject("approved-example-id")
+    subject = session.subjects["DEMO101"]
+    answers = session.answer_reports["DEMO101"].answers
+    exam = ExamService(session.database, subject.questions, answers).create_session(
+        ExamConfig("DEMO101", ("Selections_1_choose",), 2, 30, FeedbackMode.DEFERRED)
+    )
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "colab_mobile" / "streamlit_app.py")).run(timeout=20)
+    app.session_state["learning_session"] = session
+    app.session_state["subject_name"] = "DEMO101"
+    app.session_state["page"] = "exam"
+    app.session_state["exam"] = exam
+    app.session_state["exam_deadline"] = time.monotonic() + 1800
+    app.run(timeout=20)
+    assert not app.exception
+    assert all(button.label != "— Chưa chọn —" for button in app.button)
+    next(button for button in app.button if button.label == "A").click().run(timeout=20)
+    assert exam.current.selected_answer == "A"
+    next(button for button in app.button if button.label == "A").click().run(timeout=20)
+    assert exam.current.selected_answer == ""
     session.close()
