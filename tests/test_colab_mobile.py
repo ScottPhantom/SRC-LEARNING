@@ -85,3 +85,23 @@ def test_streamlit_import_progress_stays_on_ui_thread(tmp_path: Path) -> None:
     assert app.session_state["page"] == "modes"
     assert app.session_state["subject_name"] == "DEMO101"
     session.close()
+
+
+def test_streamlit_cram_records_result_when_checked(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    session = MobileLearningSession(tmp_path / "cram-ui", installer=FakeInstaller())
+    session.install_subject("approved-example-id")
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "colab_mobile" / "streamlit_app.py")).run(timeout=20)
+    app.session_state["learning_session"] = session
+    app.session_state["subject_name"] = "DEMO101"
+    app.session_state["page"] = "cram"
+    app.run(timeout=20)
+    question = app.session_state["cram"].state().question
+    app.radio[0].set_value(question.correct_answer).run(timeout=20)
+    next(button for button in app.button if button.label == "Kiểm tra").click().run(timeout=20)
+    assert not app.exception
+    assert app.session_state["cram"].state().mastered == 1
+    assert any(button.label == "Câu tiếp →" for button in app.button)
+    session.close()

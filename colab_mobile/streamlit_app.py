@@ -39,7 +39,9 @@ def init() -> None:
         state.exam_result = None
         state.exam_deadline = 0.0
         state.revealed = False
-        state.cram_checked = None
+        state.cram_pending = None
+        state.cram_history = []
+        state.cram_cursor = None
         state.quick_entries = None
         state.quick_index = 0
         state.quick_ratable = False
@@ -61,7 +63,9 @@ def reset_mode() -> None:
     state.exam = None
     state.exam_result = None
     state.revealed = False
-    state.cram_checked = None
+    state.cram_pending = None
+    state.cram_history = []
+    state.cram_cursor = None
     state.quick_entries = None
     state.flash_history = []
     state.flash_cursor = None
@@ -80,7 +84,7 @@ def header() -> None:
         with cols[0]:
             st.markdown('<div class="src-logo"><span class="src-logo-mark">✦</span> SRC Learning</div>', unsafe_allow_html=True)
         with cols[1]:
-            if st.button("＋", help="Thêm môn", width="stretch"):
+            if st.button("＋", help="Thêm môn", width="stretch", disabled=st.session_state.exam is not None):
                 go("add")
         with cols[2]:
             if st.button("◷", help="Lịch sử bài thi", width="stretch"):
@@ -114,14 +118,14 @@ def image_view(question: Question) -> None:
         st.error(f"Không đọc được ảnh câu hỏi: {exc}")
 
 
-def answer_input(question: Question, key: str, selected: str = "") -> str:
+def answer_input(question: Question, key: str, selected: str = "", disabled: bool = False) -> str:
     options = list(question.options)
     if question.is_multiple:
-        choices = st.multiselect("Chọn đáp án", options, default=list(selected), key=key)
+        choices = st.multiselect("Chọn đáp án", options, default=list(selected), key=key, disabled=disabled)
         return normalize_answer("".join(choices))
     choices = ["— Chưa chọn —", *options]
     index = choices.index(selected) if selected in choices else 0
-    value = st.radio("Chọn đáp án", choices, index=index, horizontal=True, key=key)
+    value = st.radio("Chọn đáp án", choices, index=index, horizontal=True, key=key, disabled=disabled)
     return "" if value == choices[0] else value
 
 
@@ -129,6 +133,10 @@ def home() -> None:
     st.title("Thư viện")
     st.markdown('<p class="src-lead">Chọn môn học để bắt đầu ôn tập</p>', unsafe_allow_html=True)
     session = st.session_state.learning_session
+    if st.session_state.exam is not None:
+        st.warning("Bài thi đang làm vẫn tiếp tục tính giờ.")
+        if st.button("Tiếp tục bài thi", type="primary"):
+            go("exam")
     if not session.subjects:
         with st.container(border=True):
             st.info("Thư viện đang trống. Nhập Drive ID của môn đã được phê duyệt để tải dữ liệu.")
@@ -144,7 +152,7 @@ def home() -> None:
                 st.subheader(name)
                 st.caption(f"{subject.question_count} câu hỏi · {len(subject.category_counts)} loại câu")
             with right:
-                if st.button("Mở môn học →", key=f"open-{name}", type="primary", width="stretch"):
+                if st.button("Mở môn học →", key=f"open-{name}", type="primary", width="stretch", disabled=st.session_state.exam is not None):
                     st.session_state.subject_name = name
                     reset_mode()
                     go("modes")
@@ -202,6 +210,11 @@ def modes() -> None:
     if st.session_state.notice:
         st.success(st.session_state.notice)
         st.session_state.notice = ""
+    if st.session_state.exam is not None:
+        st.warning("Bài thi đang làm vẫn tiếp tục tính giờ.")
+        if st.button("Tiếp tục bài thi", type="primary"):
+            go("exam")
+        return
     cards = [
         ("flash", "▣", "Học bình thường", "Lật thẻ, tự đánh giá đã thuộc hoặc chưa thuộc."),
         ("cram", "⚡", "Học cấp tốc", "Trả lời theo vòng, ôn lại câu sai."),
@@ -381,40 +394,92 @@ def cram() -> None:
             return
         state.cram.resume_or_start()
     cycle = state.cram.state()
-    subject_header("Học cấp tốc", f"Vòng {cycle.current_round}/{cycle.total_rounds} · Còn {cycle.remaining} · Đã thuộc {cycle.mastered}")
-    if cycle.completed or cycle.question is None:
+    if state.cram_cursor is not None:
+        old_question, old_selected, old_correct = state.cram_history[state.cram_cursor]
+        subject_header("Học cấp tốc", f"Xem lại {state.cram_cursor + 1}/{len(state.cram_history)} · Chỉ xem")
+        picture, side = st.columns([3, 1])
+        with picture:
+            image_view(old_question)
+        with side, st.container(border=True):
+            st.markdown(f"**Bạn chọn:** {html.escape(old_selected)}")
+            st.markdown(f"**Đáp án:** {html.escape(old_question.correct_answer)}")
+            st.success("Đúng") if old_correct else st.error("Sai")
+        previous, following = st.columns(2)
+        with previous:
+            if st.button("← Câu trước", disabled=state.cram_cursor == 0, width="stretch"):
+                state.cram_cursor -= 1
+                st.rerun()
+        with following:
+            if st.button("Câu sau →", width="stretch"):
+                state.cram_cursor = None if state.cram_cursor == len(state.cram_history) - 1 else state.cram_cursor + 1
+                st.rerun()
+        return
+
+    pending = state.cram_pending
+    shown_cycle = pending[0] if pending else cycle
+    question = pending[1] if pending else cycle.question
+    subject_header("Học cấp tốc", f"Vòng {shown_cycle.current_round}/{shown_cycle.total_rounds} · Còn {cycle.remaining} · Đã thuộc {cycle.mastered}")
+    if question is None:
         st.success(f"Hoàn thành. Đã thuộc {cycle.mastered}, trả lời sai {cycle.wrong} lần.")
         if st.button("Bắt đầu vòng mới", type="primary"):
             state.cram.start_new()
-            state.cram_checked = None
+            state.cram_pending = None
+            state.cram_history = []
             st.rerun()
         return
     picture, side = st.columns([3, 1])
     with picture:
-        image_view(cycle.question)
+        image_view(question)
     with side, st.container(border=True):
-        selected = answer_input(cycle.question, f"cram-{cycle.cycle_id}-{cycle.question.id}")
-        if state.cram_checked is None:
+        selected = answer_input(
+            question,
+            f"cram-{shown_cycle.cycle_id}-{question.id}",
+            selected=pending[2] if pending else "",
+            disabled=pending is not None,
+        )
+        if pending is None:
             if st.button("Kiểm tra", type="primary", width="stretch"):
                 if selected:
-                    state.cram_checked = state.cram.is_answer_correct(cycle.question, selected)
+                    correct = state.cram.is_answer_correct(question, selected)
+                    state.cram.rate_current(correct)
+                    state.cram_history.append((question, selected, correct))
+                    state.cram_pending = (cycle, question, selected, correct)
                     st.rerun()
                 else:
                     st.warning("Hãy chọn đáp án.")
         else:
-            if state.cram_checked:
+            if pending[3]:
                 st.success("Đúng")
             else:
                 st.error("Sai")
-            st.markdown(f'**Đáp án: {html.escape(cycle.question.correct_answer)}**')
+            st.markdown(f'**Đáp án: {html.escape(question.correct_answer)}**')
             if st.button("Câu tiếp →", type="primary", width="stretch"):
-                state.cram.rate_current(state.cram_checked)
-                state.cram_checked = None
+                state.cram_pending = None
                 st.rerun()
         if st.button("Bắt đầu vòng mới", width="stretch"):
             state.cram.start_new()
-            state.cram_checked = None
+            state.cram_pending = None
+            state.cram_history = []
             st.rerun()
+    if state.cram_history and st.button("← Xem câu đã làm", width="stretch"):
+        state.cram_cursor = len(state.cram_history) - 1
+        st.rerun()
+    if pending is None:
+        available = [item for item in state.cram.current_round_items() if not item.mastered]
+        if len(available) > 1:
+            st.markdown("**Chuyển đến câu trong vòng**")
+            choices = {item.question.id: item for item in available}
+            target_id = st.selectbox(
+                "Câu trong vòng",
+                list(choices),
+                index=next((index for index, item in enumerate(available) if item.question.id == question.id), 0),
+                format_func=lambda qid: choices[qid].question.relative_path.rsplit("/", 1)[-1],
+                label_visibility="collapsed",
+                key=f"cram-nav-{cycle.cycle_id}-{cycle.current_round}",
+            )
+            if st.button("Đi đến câu", disabled=target_id == question.id, width="stretch"):
+                state.cram.focus_question(target_id)
+                st.rerun()
 
 
 def submit_exam(reason: str) -> None:
@@ -476,7 +541,7 @@ def exam() -> None:
         image_view(item.question)
     with side, st.container(border=True):
         key = f"exam-{id(exam)}-{exam.current_index}"
-        selected = answer_input(item.question, key, item.selected_answer)
+        selected = answer_input(item.question, key, item.selected_answer, disabled=item.confirmed)
         if item.confirmed:
             st.markdown(f'**Đáp án: {html.escape(item.question.correct_answer)}**')
         if exam.config.feedback_mode == FeedbackMode.IMMEDIATE and not item.confirmed:
@@ -553,8 +618,10 @@ def result() -> None:
     retest, configure, home_button = st.columns(3)
     with retest:
         if st.button("↻ Làm lại cấu hình cũ", type="primary", width="stretch"):
-            subject, report = current()
-            service = ExamService(st.session_state.learning_session.database, subject.questions, report.answers)
+            learning_session = st.session_state.learning_session
+            subject = learning_session.subjects[result.config.subject]
+            report = learning_session.answer_reports[result.config.subject]
+            service = ExamService(learning_session.database, subject.questions, report.answers)
             try:
                 st.session_state.exam = service.create_session(result.config)
             except ValueError as exc:
