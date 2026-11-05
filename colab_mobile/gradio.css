@@ -1,6 +1,6 @@
 :root { --src-bg: #0e1119; --src-panel: #151b27; --src-border: #303848; --src-text: #f4f6fa; --src-muted: #a8b4c7; --src-blue: #0a84ff; }
 body, gradio-app, .gradio-container { background: radial-gradient(ellipse at 55% 25%, #10192a 0%, var(--src-bg) 66%) !important; color: var(--src-text) !important; }
-.gradio-container { max-width: 1280px !important; margin: auto !important; padding: 18px 16px 40px !important; }
+.gradio-container { width: 100% !important; max-width: 1280px !important; margin: auto !important; padding: 18px 16px 40px !important; }
 .gradio-container h1 { font-size: clamp(2rem, 4vw, 3rem); font-weight: 800; letter-spacing: -.04em; margin: 20px 0 8px; }
 .gradio-container h2 { font-size: 1.3rem; font-weight: 750; margin: 0; }
 .src-muted, .src-mode-card p { color: var(--src-muted) !important; }
