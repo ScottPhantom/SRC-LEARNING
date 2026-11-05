@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "esbuild src.js --bundle --minify --format=iife --outfile=icon_runtime.js"
+  },
+  "dependencies": {
+    "lucide": "1.69.0",
+    "morphicons": "2.0.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

@@ -71,3 +71,4 @@ ocr_failures/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+colab_mobile/icons/node_modules/

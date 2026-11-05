@@ -2,7 +2,6 @@
 from __future__ import annotations
 import csv
 import io
-import time
 from pathlib import Path
 from PIL import Image
 import pytest
@@ -71,65 +70,37 @@ def test_three_modes_use_same_backend_and_mask(tmp_path: Path) -> None:
     session.close()
 
 
-def test_streamlit_import_progress_stays_on_ui_thread(tmp_path: Path) -> None:
-    pytest.importorskip("streamlit")
-    from streamlit.testing.v1 import AppTest
+def test_gradio_app_reuses_session_and_submits_exam(tmp_path: Path, monkeypatch) -> None:
+    pytest.importorskip("gradio")
+    from colab_mobile import gradio_app
 
-    session = MobileLearningSession(tmp_path / "streamlit", installer=FakeInstaller())
-    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "colab_mobile" / "streamlit_app.py")).run(timeout=20)
-    app.session_state["learning_session"] = session
-    app.session_state["page"] = "add"
-    app.run(timeout=20)
-    app.text_input[0].set_value("approved-example-id").run(timeout=20)
-    next(button for button in app.button if button.label == "Tải môn học").click().run(timeout=20)
-    assert not app.exception
-    assert app.session_state["page"] == "modes"
-    assert app.session_state["subject_name"] == "DEMO101"
-    session.close()
-
-
-def test_streamlit_cram_records_result_when_checked(tmp_path: Path) -> None:
-    pytest.importorskip("streamlit")
-    from streamlit.testing.v1 import AppTest
-
-    session = MobileLearningSession(tmp_path / "cram-ui", installer=FakeInstaller())
+    session = MobileLearningSession(tmp_path / "gradio", installer=FakeInstaller())
     session.install_subject("approved-example-id")
-    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "colab_mobile" / "streamlit_app.py")).run(timeout=20)
-    app.session_state["learning_session"] = session
-    app.session_state["subject_name"] = "DEMO101"
-    app.session_state["page"] = "cram"
-    app.run(timeout=20)
-    question = app.session_state["cram"].state().question
-    next(button for button in app.button if button.label == question.correct_answer).click().run(timeout=20)
-    next(button for button in app.button if button.label == "Kiểm tra").click().run(timeout=20)
-    assert not app.exception
-    assert app.session_state["cram"].state().mastered == 1
-    assert any(button.label == "Câu tiếp →" for button in app.button)
-    session.close()
-
-
-def test_streamlit_exam_answer_buttons_save_and_toggle(tmp_path: Path) -> None:
-    pytest.importorskip("streamlit")
-    from streamlit.testing.v1 import AppTest
-
-    session = MobileLearningSession(tmp_path / "exam-ui", installer=FakeInstaller())
-    session.install_subject("approved-example-id")
-    subject = session.subjects["DEMO101"]
-    answers = session.answer_reports["DEMO101"].answers
-    exam = ExamService(session.database, subject.questions, answers).create_session(
+    monkeypatch.setattr(gradio_app, "_session", session)
+    app = gradio_app.create_app()
+    assert app is not None
+    view = gradio_app.view_for("test-client")
+    view.subject_name = "DEMO101"
+    subject, report = gradio_app.current(view)
+    assert subject.name == "DEMO101"
+    exam = ExamService(session.database, subject.questions, report.answers).create_session(
         ExamConfig("DEMO101", ("Selections_1_choose",), 2, 30, FeedbackMode.DEFERRED)
     )
-    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "colab_mobile" / "streamlit_app.py")).run(timeout=20)
-    app.session_state["learning_session"] = session
-    app.session_state["subject_name"] = "DEMO101"
-    app.session_state["page"] = "exam"
-    app.session_state["exam"] = exam
-    app.session_state["exam_deadline"] = time.monotonic() + 1800
-    app.run(timeout=20)
-    assert not app.exception
-    assert all(button.label != "— Chưa chọn —" for button in app.button)
-    next(button for button in app.button if button.label == "A").click().run(timeout=20)
-    assert exam.current.selected_answer == "A"
-    next(button for button in app.button if button.label == "A").click().run(timeout=20)
-    assert exam.current.selected_answer == ""
+    view.exam = exam
+    exam.set_answer(exam.current.question.correct_answer)
+    gradio_app.submit_exam(view, "user")
+    assert view.page == "result" and view.exam is None
+    assert view.exam_result.total == 2
     session.close()
+
+
+def test_gradio_notebook_opens_share_link_and_icons_are_bundled() -> None:
+    import json
+
+    root = Path(__file__).resolve().parents[1]
+    notebook = json.loads((root / "notebooks" / "SRC_LEARNING_Mobile_Web_APP.ipynb").read_text(encoding="utf-8"))
+    launch = "".join(notebook["cells"][2]["source"])
+    assert "launch_app(share=True" in launch
+    assert 'target="_blank"' in launch
+    icon_bundle = (root / "colab_mobile" / "icons" / "icon_runtime.js").read_text(encoding="utf-8")
+    assert "morph-icon" in icon_bundle
