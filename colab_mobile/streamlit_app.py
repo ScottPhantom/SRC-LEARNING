@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import html
 import os
+import queue
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import streamlit as st
@@ -156,13 +158,31 @@ def add_subject() -> None:
         code = st.text_input("Drive ID hoặc link chia sẻ", placeholder="Dán ID môn học")
         if st.button("Tải môn học", type="primary", disabled=not code.strip()):
             progress = st.progress(0, text="Đang chuẩn bị...")
+            updates: queue.Queue[tuple[int, str]] = queue.Queue()
+
+            def update_progress(_stage: str, percent: int, message: str) -> None:
+                updates.put((percent, message))
+
+            def show_updates() -> None:
+                while True:
+                    try:
+                        percent, message = updates.get_nowait()
+                    except queue.Empty:
+                        break
+                    progress.progress(min(100, max(0, percent)), text=message)
+
             try:
-                result = st.session_state.learning_session.install_subject(
-                    code.strip(),
-                    progress=lambda _stage, percent, message: progress.progress(
-                        min(100, max(0, percent)), text=message
-                    ),
-                )
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        st.session_state.learning_session.install_subject,
+                        code.strip(),
+                        update_progress,
+                    )
+                    while not future.done():
+                        show_updates()
+                        time.sleep(0.15)
+                    result = future.result()
+                show_updates()
             except Exception as exc:
                 st.error(f"Không tải được môn: {exc}")
             else:

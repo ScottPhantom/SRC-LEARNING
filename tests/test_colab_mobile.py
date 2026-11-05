@@ -4,6 +4,7 @@ import csv
 import io
 from pathlib import Path
 from PIL import Image
+import pytest
 from app.domain.models import ExamConfig, FeedbackMode
 from app.services.data_package_installer import DataInstallResult
 from app.services.exam import ExamService
@@ -66,4 +67,21 @@ def test_three_modes_use_same_backend_and_mask(tmp_path: Path) -> None:
     result = exam.submit("user")
     assert result.total == 2 and result.correct == 1
     assert len(session.database.exam_history("DEMO101")) == 1
+    session.close()
+
+
+def test_streamlit_import_progress_stays_on_ui_thread(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    session = MobileLearningSession(tmp_path / "streamlit", installer=FakeInstaller())
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "colab_mobile" / "streamlit_app.py")).run(timeout=20)
+    app.session_state["learning_session"] = session
+    app.session_state["page"] = "add"
+    app.run(timeout=20)
+    app.text_input[0].set_value("approved-example-id").run(timeout=20)
+    next(button for button in app.button if button.label == "Tải môn học").click().run(timeout=20)
+    assert not app.exception
+    assert app.session_state["page"] == "modes"
+    assert app.session_state["subject_name"] == "DEMO101"
     session.close()
