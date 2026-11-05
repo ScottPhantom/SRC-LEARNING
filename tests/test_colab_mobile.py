@@ -104,3 +104,19 @@ def test_gradio_notebook_opens_share_link_and_icons_are_bundled() -> None:
     assert 'target="_blank"' in launch
     icon_bundle = (root / "colab_mobile" / "icons" / "icon_runtime.js").read_text(encoding="utf-8")
     assert "morph-icon" in icon_bundle
+
+
+def test_gradio_launcher_returns_closable_blocks(tmp_path: Path, monkeypatch) -> None:
+    pytest.importorskip("gradio")
+    from colab_mobile import gradio_app
+
+    session = MobileLearningSession(tmp_path / "launch", installer=FakeInstaller())
+    monkeypatch.setattr(gradio_app, "_session", session)
+    demo, local_url, share_url = gradio_app.launch_app(share=False, prevent_thread_lock=True)
+    try:
+        assert callable(demo.close)
+        assert local_url.startswith("http://127.0.0.1:")
+        assert share_url is None
+    finally:
+        demo.close()
+        session.close()
