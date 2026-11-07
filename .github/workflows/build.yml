@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - local/ver2.1-integration
+      - ver2.1-integration
     tags:
       - "v*"
 
