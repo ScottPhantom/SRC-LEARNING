@@ -35,7 +35,7 @@ web project.
 ## Local branch and Git ownership
 
 - The required development branch for SRC-LEARNING is
-  `local/ver2.1-integration`.
+  `ver2.1-integration`.
 - Codex must verify the active branch and working-tree status before editing.
   If the active branch is different, stop before changing files.
 - Antigravity is a UI implementation assistant only. It may edit UI-related
