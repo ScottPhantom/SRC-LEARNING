@@ -9,6 +9,7 @@ import re
 import stat
 import tempfile
 import threading
+import unicodedata
 import zipfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -19,8 +20,10 @@ import gdown
 from tqdm import tqdm
 
 from app.config import CATEGORIES, IMAGE_EXTENSIONS
+from app.domain.models import Question, parse_option_letters
 from app.repositories.answer_key import AnswerKeyRepository
 from app.services.data_scanner import DataScannerService
+from app.services.question_bank_updates import stage_replacement_answer_history
 from app.services.subject_management import SubjectManagementError, SubjectManager
 
 ProgressCallback = Callable[[str, int, str], None]
@@ -64,6 +67,7 @@ class DataInstallResult:
     question_count: int
     archive_sha256: str
     backup_path: Path | None = None
+    previous_bank_version: int | None = None
 
 
 class DataPackageCatalog:
@@ -84,6 +88,11 @@ class DataPackageCatalog:
                 sha256=str(item["sha256"]).lower(),
                 archive_size=int(item["archive_size"]),
                 enabled=bool(item.get("enabled", False)),
+                expected_questions=(
+                    int(item["expected_questions"])
+                    if item.get("expected_questions") is not None
+                    else None
+                ),
             )
             for item in payload.get("packages", [])
         ]
@@ -223,6 +232,16 @@ class DataPackageInstaller:
                     f"Số câu của gói {package.subject} không khớp danh mục "
                     f"({question_count}/{package.expected_questions})."
                 )
+            previous_bank_version = None
+            if destination.exists():
+                try:
+                    previous_bank_version = stage_replacement_answer_history(
+                        destination, source, package.subject
+                    )
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    raise DataPackageError(
+                        f"Không chuyển được lịch sử answer version sang gói mới: {exc}"
+                    ) from exc
             report("install", 0, "Đang chuyển dữ liệu đã xác minh vào DATA…")
             backup_path = self._atomic_install(source, destination, replace_existing)
             report("complete", 100, f"Đã cài đặt {package.subject} thành công.")
@@ -232,6 +251,7 @@ class DataPackageInstaller:
                 question_count=question_count,
                 archive_sha256=digest,
                 backup_path=backup_path,
+                previous_bank_version=previous_bank_version,
             )
 
     @staticmethod
@@ -406,6 +426,7 @@ class DataPackageInstaller:
             raise DataPackageError(
                 f"Gói môn học có {len(subject.invalid_images)} ảnh bị lỗi."
             )
+        DataPackageInstaller._validate_option_metadata(subject.path, subject.questions)
         progress("validate", 65, "Đang kiểm tra answers.csv…")
         answer_report = AnswerKeyRepository().load(subject.path, subject.questions)
         if (
@@ -420,6 +441,41 @@ class DataPackageInstaller:
             )
         progress("validate", 100, f"Đã xác minh {subject.question_count} câu hỏi.")
         return subject.path, subject.question_count
+
+    @staticmethod
+    def _validate_option_metadata(subject_path: Path, questions: list[Question]) -> None:
+        metadata = subject_path / "question_metadata.csv"
+        if not metadata.exists():
+            return
+        if metadata.is_symlink() or not metadata.is_file():
+            raise DataPackageError("question_metadata.csv không an toàn hoặc không hợp lệ.")
+        question_paths = {question.relative_path for question in questions}
+        seen: set[str] = set()
+        try:
+            with metadata.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                headers = reader.fieldnames or []
+                # Other projects also use this file for source provenance only.
+                if "option_letters" not in headers:
+                    return
+                if "image_name" not in headers:
+                    raise DataPackageError("question_metadata.csv thiếu cột image_name.")
+                for line_number, row in enumerate(reader, start=2):
+                    relative = unicodedata.normalize(
+                        "NFC", str(row.get("image_name") or "").strip()
+                    )
+                    options = parse_option_letters(str(row.get("option_letters") or ""))
+                    if relative not in question_paths or relative in seen or not options:
+                        raise DataPackageError(
+                            f"question_metadata.csv dòng {line_number} có câu hỏi hoặc lựa chọn không hợp lệ."
+                        )
+                    seen.add(relative)
+        except (OSError, UnicodeError, csv.Error) as exc:
+            raise DataPackageError(f"Không đọc được question_metadata.csv: {exc}") from exc
+        if seen != question_paths:
+            raise DataPackageError(
+                f"question_metadata.csv thiếu lựa chọn cho {len(question_paths - seen)} câu hỏi."
+            )
 
     def _atomic_install(
         self, source: Path, destination: Path, replace_existing: bool

@@ -47,7 +47,33 @@ def test_recognize_retries_when_first_ocr_result_is_empty(monkeypatch) -> None:
     crop = np.full((50, 250, 3), 255, dtype=np.uint8)
 
     assert build_answers.recognize(crop, multiple=False) == "B"
-    assert all("ABCDEFGHabcdefgh" in config for config in configs)
+    assert all("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" in config for config in configs)
+
+
+def test_recognize_supports_tenth_option_and_filters_unlisted_letters(monkeypatch) -> None:
+    results = iter(["K", "J"])
+    configs: list[str] = []
+
+    def fake_ocr(*_args, **kwargs) -> str:
+        configs.append(kwargs["config"])
+        return next(results)
+
+    monkeypatch.setattr(build_answers.pytesseract, "image_to_string", fake_ocr)
+    crop = np.full((50, 250, 3), 255, dtype=np.uint8)
+    assert build_answers.recognize(crop, multiple=False, options=tuple("ABCDEFGHIJ")) == "J"
+    assert all("ABCDEFGHIJabcdefghij" in config for config in configs)
+
+
+def test_manual_answer_guidance_uses_question_choice_range() -> None:
+    question = Question(
+        id="q-e",
+        subject="SSG105",
+        category="Selections_1_choose",
+        relative_path="Selections_1_choose/Q107.png",
+        absolute_path=Path("/DATA/SSG105/Selections_1_choose/Q107.png"),
+        option_letters=tuple("ABCDE"),
+    )
+    assert "A–E" in build_answers.answer_rule(question)
 
 
 def test_parse_region_rejects_outside_image() -> None:

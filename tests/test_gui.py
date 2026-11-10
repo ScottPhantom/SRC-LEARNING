@@ -1698,6 +1698,144 @@ def test_single_choice_fifth_option_can_be_selected_and_graded(tmp_path: Path) -
     widget.deleteLater()
 
 
+def test_answer_sidebar_fits_four_choices_and_resizes_for_each_question(
+    tmp_path: Path,
+) -> None:
+    from app.ui.assessment_sidebar import AssessmentSidebar
+
+    sidebar = AssessmentSidebar()
+    sidebar.resize(330, 700)
+    sidebar.navigation.set_count(154)
+    sidebar.add_action(QPushButton("Xác nhận đáp án"))
+    sidebar.add_action_row(QPushButton("Câu trước"), QPushButton("Câu sau"))
+    sidebar.add_action(QPushButton("Nộp bài"))
+    sidebar.show()
+
+    def question(category: str, options: str = "") -> Question:
+        return Question(
+            id=f"{category}-{options}",
+            subject="GUI101",
+            category=category,
+            relative_path="question.png",
+            absolute_path=tmp_path / "question.png",
+            option_letters=tuple(options),
+        )
+
+    sidebar.answer_options.set_question(question("Selections_1_choose"))
+    QT_APP.processEvents()
+    assert [button.text() for button in sidebar.answer_options.option_widgets] == list("ABCD")
+    assert sidebar.answer_scroll.verticalScrollBar().maximum() == 0
+    assert sidebar.answer_options.option_widgets[-1].geometry().bottom() < sidebar.answer_scroll.viewport().height()
+
+    sidebar.answer_options.set_question(question("Selections_1_choose", "ABCDE"))
+    QT_APP.processEvents()
+    assert [button.text() for button in sidebar.answer_options.option_widgets] == list("ABCDE")
+    assert sidebar.answer_scroll.verticalScrollBar().maximum() == 0
+    assert sidebar.answer_options.option_widgets[-1].geometry().bottom() < sidebar.answer_scroll.viewport().height()
+
+    sidebar.answer_options.set_question(question("Selections_Multiple_choose", "ABCDEFGHIJKL"))
+    QT_APP.processEvents()
+    assert len(sidebar.answer_options.option_widgets) == 12
+    assert sidebar.answer_scroll.verticalScrollBar().maximum() > 0
+
+    sidebar.answer_options.set_question(question("True_False", "ABCDE"))
+    QT_APP.processEvents()
+    assert [button.text() for button in sidebar.answer_options.option_widgets] == ["True", "False"]
+    assert [button.shortcut_hint.text() for button in sidebar.answer_options.option_widgets] == ["A", "B"]
+    assert sidebar.answer_scroll.verticalScrollBar().maximum() == 0
+    assert sidebar.answer_options.toggle_option("A")
+    assert sidebar.answer_options.selected_answer() == "A"
+    assert sidebar.answer_options.toggle_option("B")
+    assert sidebar.answer_options.selected_answer() == "B"
+    assert not sidebar.answer_options.toggle_option("C")
+    sidebar.close()
+    sidebar.deleteLater()
+
+
+def test_more_than_e_options_remain_selectable_and_scroll_in_sidebar(tmp_path: Path) -> None:
+    from app.ui.assessment_sidebar import AssessmentSidebar
+
+    question = Question(
+        id="twelve-options",
+        subject="SSG105",
+        category="Selections_Multiple_choose",
+        relative_path="Selections_Multiple_choose/Q012.png",
+        absolute_path=tmp_path / "Q012.png",
+        option_letters=tuple("ABCDEFGHIJKL"),
+    )
+    sidebar = AssessmentSidebar()
+    sidebar.resize(330, 700)
+    sidebar.answer_options.set_question(question)
+    sidebar.show()
+    QT_APP.processEvents()
+    assert len(sidebar.answer_options.option_widgets) == 12
+    assert sidebar.answer_options.option_widgets[9].shortcut_hint.text() == "J"
+    assert sidebar.answer_scroll.verticalScrollBar().maximum() > 0
+    assert sidebar.answer_options.toggle_option("J")
+    assert sidebar.answer_options.toggle_option("L")
+    assert sidebar.answer_options.selected_answer() == "JL"
+    sidebar.close()
+    sidebar.deleteLater()
+
+
+def test_exam_can_select_and_grade_tenth_option_by_letter(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    subject = make_subject(tmp_path, 1)
+    question = replace(subject.questions[0], option_letters=tuple("ABCDEFGHIJ"))
+    database = Database(tmp_path / "exam-tenth-option.sqlite3")
+    database.sync_questions([question], [question.subject])
+    session = ExamService(database, [question], {question.relative_path: "J"}).create_session(
+        ExamConfig(
+            subject=question.subject,
+            categories=(question.category,),
+            question_count=1,
+            duration_minutes=1,
+            feedback_mode=FeedbackMode.DEFERRED,
+        )
+    )
+    screen = ExamScreen(session, (0.0, 0.9, 0.25, 0.1))
+    screen.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_J, Qt.NoModifier))
+    assert session.current.selected_answer == "J"
+    assert session.submit().correct == 1
+    screen._timer.stop()
+    screen.deleteLater()
+    database.close()
+
+
+def test_exam_true_false_buttons_use_a_b_hotkeys(tmp_path: Path) -> None:
+    image_path = tmp_path / "DATA" / "GUI101" / "True_False" / "Câu đúng sai.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1000, 500), "white").save(image_path)
+    question = DataScannerService(tmp_path / "DATA").scan()[0].questions[0]
+    question.option_letters = tuple("ABCDE")
+    database = Database(tmp_path / "exam-true-false.sqlite3")
+    database.sync_questions([question], [question.subject])
+    session = ExamService(
+        database, [question], {question.relative_path: "B"}
+    ).create_session(
+        ExamConfig(
+            subject=question.subject,
+            categories=("True_False",),
+            question_count=1,
+            duration_minutes=1,
+            feedback_mode=FeedbackMode.DEFERRED,
+        )
+    )
+    screen = ExamScreen(session, (0.0, 0.9, 0.25, 0.1))
+    assert [button.text() for button in screen.answer_options.option_widgets] == ["True", "False"]
+    screen.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_A, Qt.NoModifier))
+    assert session.current.selected_answer == "A"
+    screen.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_B, Qt.NoModifier))
+    assert session.current.selected_answer == "B"
+    screen.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_C, Qt.NoModifier))
+    assert session.current.selected_answer == "B"
+    assert session.submit().correct == 1
+    screen._timer.stop()
+    screen.deleteLater()
+    database.close()
+
+
 def test_exam_keymap_toggles_single_choice_and_grid_navigates(tmp_path: Path) -> None:
     subject = make_subject(tmp_path, 3)
     database = Database(tmp_path / "exam-keymap.sqlite3")
@@ -1786,9 +1924,13 @@ def test_home_screen_loading_and_subjects_states(tmp_path: Path) -> None:
     # Test set_subjects với 1 môn
     subject1 = make_subject(tmp_path, 2)
     home.set_subjects([subject1], data_dir)
-    assert home.cards_grid.count() == 1
-    card1 = home.cards_grid.itemAt(0).widget()
+    assert len(home._card_widgets) == 1
+    card1 = home._card_widgets[subject1.name]
     assert isinstance(card1, SubjectCard)
+    assert any(
+        home.cards_grid.itemAt(index).widget() is card1
+        for index in range(home.cards_grid.count())
+    )
     assert card1.title_label.text() == subject1.name
     assert f"{subject1.question_count} câu hỏi" in card1.count_label.text()
     assert "Multiple_choose" not in card1.title_label.text()
@@ -1799,7 +1941,11 @@ def test_home_screen_loading_and_subjects_states(tmp_path: Path) -> None:
     subject3 = make_subject(tmp_path, 4)
     subject3.name = "PHY202"
     home.set_subjects([subject1, subject2, subject3], data_dir)
-    assert home.cards_grid.count() == 3
+    assert len(home._card_widgets) == 3
+    assert any(
+        header.text() == "Chưa phân loại"
+        for header in home._section_headers.values()
+    )
     assert "3 môn học" in home.status_capsule.label.text()
     home.deleteLater()
 
@@ -2082,6 +2228,8 @@ def test_existing_subject_import_cancel_keeps_files(tmp_path: Path, monkeypatch)
     database = Database(tmp_path / "import-guard.sqlite3")
     database.set_setting("data_dir", str(data))
     window = MainWindow(database)
+    # Cancellation should not depend on the public Sheet or a developer cache.
+    window._catalog_source = PackageCatalogSource("", tmp_path / "catalog.csv")
     window.thread_pool.waitForDone(2000)
     QT_APP.processEvents()
     window.show_data_import()
@@ -2212,6 +2360,123 @@ def test_replace_restores_files_when_database_sync_fails(tmp_path: Path, monkeyp
     database.close()
 
 
+def test_drive_replacement_restores_old_subject_when_answer_version_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services.data_package_installer import DataInstallResult
+    from app.services.question_bank_updates import (
+        BankUpdateResult,
+        QuestionBankUpdateChecker,
+        stage_replacement_answer_history,
+    )
+    from app.services.subject_management import SubjectManager
+
+    old = make_subject(tmp_path, 1)
+    with (old.path / "answers.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerow(["Selections_1_choose/Câu 0.png", "A"])
+    (old.path / "old.txt").write_text("original", encoding="utf-8")
+    database = Database(tmp_path / "rollback-bank.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert database.latest_bank_version(old.name) == 1
+
+    watched = window.watcher.directories() + window.watcher.files()
+    if watched:
+        window.watcher.removePaths(watched)
+    backup = SubjectManager(tmp_path / "DATA").remove(old.name)
+    new = make_subject(tmp_path, 2)
+    with (new.path / "answers.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerows([
+            ["Selections_1_choose/Câu 0.png", "A"],
+            ["Selections_1_choose/Câu 1.png", "A"],
+        ])
+    (new.path / "new.txt").write_text("incoming", encoding="utf-8")
+    assert stage_replacement_answer_history(backup, new.path, new.name) == 1
+    window.show_data_import()
+    window._pending_data_install_result = DataInstallResult(
+        new.name, new.path, 2, "a" * 64, backup, previous_bank_version=1
+    )
+    monkeypatch.setattr(window, "refresh_data", lambda: None)
+    monkeypatch.setattr(
+        QuestionBankUpdateChecker,
+        "check",
+        lambda _self, _subjects, *, apply=True: [
+            BankUpdateResult(subject=new.name, errors=["giả lập lỗi lưu phiên bản"])
+        ],
+    )
+
+    window._apply_subjects([new])
+
+    assert (old.path / "old.txt").read_text(encoding="utf-8") == "original"
+    assert not (old.path / "new.txt").exists()
+    assert window._pending_data_install_result is None
+    assert database.latest_bank_version(old.name) == 1
+    assert "đã khôi phục" in window._data_import_dialog.status_label.text()
+    window._data_import_dialog.reject()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
+def test_drive_replacement_reports_success_after_answer_version_is_saved(
+    tmp_path: Path,
+) -> None:
+    from app.services.data_package_installer import DataInstallResult
+    from app.services.question_bank_updates import stage_replacement_answer_history
+    from app.services.subject_management import SubjectManager
+
+    old = make_subject(tmp_path, 1)
+    with (old.path / "answers.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerow(["Selections_1_choose/Câu 0.png", "A"])
+    database = Database(tmp_path / "success-bank.sqlite3")
+    database.set_setting("data_dir", str(tmp_path / "DATA"))
+    window = MainWindow(database)
+    window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert database.latest_bank_version(old.name) == 1
+
+    watched = window.watcher.directories() + window.watcher.files()
+    if watched:
+        window.watcher.removePaths(watched)
+    backup = SubjectManager(tmp_path / "DATA").remove(old.name)
+    new = make_subject(tmp_path, 2)
+    with (new.path / "answers.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerows([
+            ["Selections_1_choose/Câu 0.png", "A"],
+            ["Selections_1_choose/Câu 1.png", "A"],
+        ])
+    assert stage_replacement_answer_history(backup, new.path, new.name) == 1
+    window.show_data_import()
+
+    window._data_install_completed(
+        DataInstallResult(new.name, new.path, 2, "a" * 64, backup, previous_bank_version=1)
+    )
+    for _ in range(3):
+        window.thread_pool.waitForDone(2000)
+        QT_APP.processEvents()
+
+    assert database.latest_bank_version(new.name) == 2
+    assert window._pending_data_install_result is None
+    assert window._data_import_dialog._completed
+    assert "answer bank v2" in window._data_import_dialog.status_label.text()
+    assert (new.path / "answer_versions" / "answers.v1.csv").is_file()
+    assert (new.path / "answer_versions" / "answers.v2.csv").is_file()
+    window._data_import_dialog.accept()
+    window.close()
+    window.thread_pool.waitForDone(2000)
+    database.close()
+
+
 def test_history_tree_groups_subjects_formats_local_time_and_selects_only_exams() -> (
     None
 ):
@@ -2314,8 +2579,66 @@ def test_home_grid_reflow_preserves_card_instances(tmp_path: Path) -> None:
 
     assert id(card1_after) == card1_id
     assert id(card2_after) == card2_id
-    assert home.cards_grid.alignment() & Qt.AlignLeft
     assert home.cards_grid.alignment() & Qt.AlignTop
+    home.deleteLater()
+
+
+def test_home_groups_courses_and_shows_three_cards_per_desktop_row(
+    tmp_path: Path,
+) -> None:
+    from app.domain.models import Subject
+    from app.ui.screens import HomeScreen
+
+    home = HomeScreen()
+    home.resize(1280, 800)
+    home.show()
+    QT_APP.processEvents()
+    subjects = [
+        Subject(name=name, path=tmp_path / name)
+        for name in ("SSG105", "ITE303c", "DAP391m", "AIL303m", "CPV301")
+    ]
+    next_year_path = tmp_path / "NEW101"
+    next_year_path.mkdir()
+    (next_year_path / "academic_term.json").write_text(
+        '{"year": 2027, "semester": "SP"}', encoding="utf-8"
+    )
+    subjects.append(Subject(name="NEW101", path=next_year_path))
+    home.set_subjects(subjects, tmp_path / "DATA")
+    QT_APP.processEvents()
+
+    assert home._current_cols >= 3
+    headers = [header.text() for header in home._section_headers.values()]
+    assert any(text.startswith("Năm 2026") for text in headers)
+    assert any(text.startswith("Năm 2027") for text in headers)
+    assert any("SU26 · Summer 2026" in text for text in headers)
+    assert any("FA26 · Fall 2026" in text for text in headers)
+
+    def card_position(name: str) -> tuple[int, int]:
+        for index in range(home.cards_grid.count()):
+            if home.cards_grid.itemAt(index).widget() is home._card_widgets[name]:
+                row, column, _, _ = home.cards_grid.getItemPosition(index)
+                return row, column
+        raise AssertionError(f"Card {name} is missing")
+
+    assert card_position("AIL303m")[0] == card_position("CPV301")[0]
+    assert card_position("CPV301")[0] == card_position("DAP391m")[0]
+    assert [card_position(name)[1] for name in ("AIL303m", "CPV301", "DAP391m")] == [0, 1, 2]
+    assert card_position("NEW101")[0] < card_position("AIL303m")[0]
+    assert card_position("AIL303m")[0] < card_position("ITE303c")[0]
+    assert home._section_headers[("year", "2027")].geometry().top() < home._section_headers[("year", "2026")].geometry().top()
+    ite = home._card_widgets["ITE303c"]
+    fall_header = home._section_headers[("term", "FA26")]
+    summer_header = home._section_headers[("term", "SU26")]
+    assert fall_header.geometry().bottom() < home._card_widgets["AIL303m"].geometry().top()
+    assert home._card_widgets["AIL303m"].geometry().bottom() < summer_header.geometry().top()
+    assert summer_header.geometry().bottom() < ite.geometry().top()
+    assert home.canvas.height() > home.scroll_area.viewport().height()
+    home.resize(1100, 700)
+    home._reflow_grid(force=True)
+    QT_APP.processEvents()
+    assert home._current_cols >= 3
+    assert all(home._card_widgets[name].width() >= 300 for name in ("AIL303m", "CPV301", "DAP391m"))
+    home.close()
     home.deleteLater()
 
 

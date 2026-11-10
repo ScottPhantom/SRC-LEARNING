@@ -61,6 +61,7 @@ from PyQt5.QtWidgets import (
 
 from app.config import CATEGORIES, CATEGORY_LABELS
 from app.domain.models import (
+    OPTION_LETTERS,
     AppSettings,
     ExamConfig,
     FeedbackMode,
@@ -70,6 +71,7 @@ from app.domain.models import (
     WeakQuestionReview,
 )
 from app.repositories.answer_key import AnswerKeyReport
+from app.services.academic_terms import AcademicTerm, group_subjects_by_term
 from app.services.exam import ExamResult, ExamService, ExamSession
 from app.services.study import CrammingService, CramState, FlashcardService, FlashState
 from app.ui.assessment_sidebar import AssessmentSidebar
@@ -98,8 +100,8 @@ def page_title(text: str, subtitle: str = "") -> tuple[QLabel, QLabel]:
 
 
 OPTION_KEY_MAP = {
-    **{Qt.Key_1 + index: option for index, option in enumerate("ABCDEFGH")},
-    **{Qt.Key_A + index: option for index, option in enumerate("ABCDEFGH")},
+    **{Qt.Key_1 + index: option for index, option in enumerate(OPTION_LETTERS[:9])},
+    **{Qt.Key_A + index: option for index, option in enumerate(OPTION_LETTERS)},
 }
 
 
@@ -435,7 +437,9 @@ class HomeScreen(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
         self._subjects_list: list[Subject] = []
+        self._term_groups: list[tuple[AcademicTerm | None, list[Subject]]] = []
         self._card_widgets: dict[str, SubjectCard] = {}
+        self._section_headers: dict[tuple[str, str], QLabel] = {}
         self._current_data_dir: Path = Path("DATA")
         self._current_cols = 0
 
@@ -474,7 +478,7 @@ class HomeScreen(QWidget):
         container_layout = QVBoxLayout(self.content_container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
-        container_layout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        container_layout.setAlignment(Qt.AlignTop)
 
         # Heading section (Title -> Subtitle -> Status Capsule)
         self.title_label = QLabel("Thư viện")
@@ -497,18 +501,19 @@ class HomeScreen(QWidget):
         # Grid Widget chứa Subject Cards
         self.cards_widget = QWidget()
         self.cards_widget.setObjectName("homeCardsContainer")
+        self.cards_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.cards_widget.setAttribute(Qt.WA_TranslucentBackground, True)
         self.cards_widget.setAutoFillBackground(False)
         self.cards_grid = QGridLayout(self.cards_widget)
         self.cards_grid.setContentsMargins(0, 0, 0, 0)
-        self.cards_grid.setHorizontalSpacing(24)
-        self.cards_grid.setVerticalSpacing(24)
-        self.cards_grid.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.cards_grid.setHorizontalSpacing(20)
+        self.cards_grid.setVerticalSpacing(16)
+        self.cards_grid.setAlignment(Qt.AlignTop)
 
         container_layout.addWidget(self.cards_widget)
         container_layout.addStretch(1)
 
-        self.canvas_layout.addWidget(self.content_container, alignment=Qt.AlignLeft | Qt.AlignTop)
+        self.canvas_layout.addWidget(self.content_container, alignment=Qt.AlignTop)
         self.canvas_layout.addStretch(1)
 
         self.scroll_area.setWidget(self.canvas)
@@ -522,6 +527,7 @@ class HomeScreen(QWidget):
 
     def set_subjects(self, subjects: list[Subject], data_dir: Path) -> None:
         self._subjects_list = subjects
+        self._term_groups = group_subjects_by_term(subjects)
         self._current_data_dir = data_dir
 
         # Xóa các card cũ không thuộc danh sách môn học
@@ -560,40 +566,86 @@ class HomeScreen(QWidget):
             card.update_theme()
 
     def _reflow_grid(self, force: bool = False) -> None:
-        if not self._subjects_list:
-            while self.cards_grid.count():
-                self.cards_grid.takeAt(0)
-            return
-
         viewport_w = self.scroll_area.viewport().width()
-        if viewport_w <= 1280:
-            margin_h = 76
-        elif viewport_w <= 1600:
-            margin_h = 100
-        else:
-            margin_h = 140
-
+        margin_h = max(24, min(76, viewport_w // 20))
         self.canvas_layout.setContentsMargins(margin_h, 64, margin_h, 48)
-
-        available_w = min(viewport_w - (margin_h * 2), 1680)
-        cols = max(1, min(4, (available_w + 24) // 444))
+        available_w = min(max(0, viewport_w - margin_h * 2), 1680)
+        cols = max(1, min(4, (available_w + 20) // 320))
 
         if cols == self._current_cols and not force:
             return
 
         self._current_cols = cols
 
-        # Gỡ bỏ các card cũ khỏi layout grid mà KHÔNG delete object
+        # Keep the same card instances when resizing or refreshing subjects.
         while self.cards_grid.count():
             self.cards_grid.takeAt(0)
+        for column in range(4):
+            self.cards_grid.setColumnStretch(column, 1 if column < cols else 0)
 
-        # Thêm lại chính các SubjectCard widget cũ vào vị trí grid mới
-        for idx, subject in enumerate(self._subjects_list):
-            card = self._card_widgets.get(subject.name)
-            if card:
-                row = idx // cols
-                col = idx % cols
-                self.cards_grid.addWidget(card, row, col, Qt.AlignLeft | Qt.AlignTop)
+        active_headers: set[tuple[str, str]] = set()
+        year_counts: dict[int, int] = {}
+        for term, items in self._term_groups:
+            if term is not None:
+                year_counts[term.year] = year_counts.get(term.year, 0) + len(items)
+
+        row = 0
+        current_year: int | None = None
+        for term, items in self._term_groups:
+            if term is None:
+                key = ("year", "unknown")
+                title = "Chưa phân loại"
+            elif term.year != current_year:
+                key = ("year", str(term.year))
+                title = f"Năm {term.year}  ·  {year_counts[term.year]} môn học"
+                current_year = term.year
+            else:
+                key = None
+
+            if key is not None:
+                header = self._section_header(key, title, "homeYearTitle")
+                self.cards_grid.addWidget(header, row, 0, 1, cols)
+                active_headers.add(key)
+                row += 1
+
+            if term is not None:
+                key = ("term", term.code)
+                title = f"{term.label}  ·  {len(items)} môn"
+                header = self._section_header(key, title, "homeTermTitle")
+                self.cards_grid.addWidget(header, row, 0, 1, cols)
+                active_headers.add(key)
+                row += 1
+
+            for index, subject in enumerate(items):
+                card = self._card_widgets[subject.name]
+                self.cards_grid.addWidget(
+                    card, row + index // cols, index % cols, Qt.AlignTop
+                )
+            row += (len(items) + cols - 1) // cols
+
+        for key in set(self._section_headers) - active_headers:
+            obsolete = self._section_headers.pop(key)
+            obsolete.hide()
+            obsolete.deleteLater()
+
+        # QScrollArea may otherwise force the canvas to viewport height and
+        # compress grid rows even though SubjectCard has a fixed height.
+        self.cards_grid.activate()
+        margins = self.canvas_layout.contentsMargins()
+        self.canvas.setMinimumHeight(
+            self.content_container.sizeHint().height()
+            + margins.top()
+            + margins.bottom()
+        )
+
+    def _section_header(self, key: tuple[str, str], text: str, name: str) -> QLabel:
+        header = self._section_headers.get(key)
+        if header is None:
+            header = QLabel(self.cards_widget)
+            header.setObjectName(name)
+            self._section_headers[key] = header
+        header.setText(text)
+        return header
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

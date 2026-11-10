@@ -5,6 +5,7 @@ import csv
 import math
 import sqlite3
 from collections import Counter, defaultdict
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -210,6 +211,8 @@ def make_figure(
     exam_count: int,
     subject: str,
     destination: Path,
+    *,
+    source_database_name: str = DEFAULT_DATABASE_PATH.name,
 ) -> None:
     width, height = 1800, 1450
     image = Image.new("RGB", (width, height), "white")
@@ -375,7 +378,8 @@ def make_figure(
 
     draw_wrapped_text(
         draw,
-        "Nguồn: study_progress.sqlite3, chỉ tính Mock Exam đã nộp. Việc người dùng chọn category khác nhau cũng làm thay đổi exposure.",
+        f"Nguồn: {source_database_name}, chỉ tính Mock Exam đã nộp. "
+        "Việc người dùng chọn category khác nhau cũng làm thay đổi exposure.",
         left=90,
         top=1365,
         maximum_width=width - 180,
@@ -439,9 +443,19 @@ def reserve_output_paths(
         suffix = f"_{counter:02d}"
 
 
-def main() -> None:
-    args = parse_args()
-    with open_database(args.database) as connection:
+def generate_reports(
+    database_path: Path,
+    output_dir: Path,
+    *,
+    subject: str | None = None,
+    allowed_paths_by_subject: Mapping[str, Collection[str]] | None = None,
+) -> list[tuple[str, Path, Path]]:
+    """Create the existing Mock Exam EDA figure and CSV from one database."""
+    output_dir = Path(output_dir)
+    if output_dir.is_symlink() or output_dir.parent.is_symlink():
+        raise ValueError(f"Thư mục báo cáo không an toàn: {output_dir}")
+    reports: list[tuple[str, Path, Path]] = []
+    with open_database(database_path) as connection:
         generated_at = datetime.now().astimezone()
         subjects = [
             str(row[0])
@@ -449,33 +463,56 @@ def main() -> None:
                 "SELECT DISTINCT subject FROM questions WHERE active=1 ORDER BY subject"
             )
         ]
-        if args.subject:
-            subjects = [args.subject]
-        for subject in subjects:
-            rows = load_rows(connection, subject)
+        if subject:
+            subjects = [subject]
+        for subject_name in subjects:
+            rows = load_rows(connection, subject_name)
+            if allowed_paths_by_subject is not None and subject_name in allowed_paths_by_subject:
+                allowed_paths = frozenset(allowed_paths_by_subject[subject_name])
+                rows = [
+                    row for row in rows
+                    if str(row["relative_path"]) in allowed_paths
+                ]
             if not rows:
-                continue
+                raise ValueError(f"Không có câu hỏi hiện hành để tạo EDA: {subject_name}")
             bank_version = int(rows[0].get("bank_version", 0))
             if bank_version:
                 exam_count = int(
                     connection.execute(
                         """SELECT COUNT(*) FROM exam_attempts
                         WHERE subject=? AND graded_bank_version=?""",
-                        (subject, bank_version),
+                        (subject_name, bank_version),
                     ).fetchone()[0]
                 )
             else:
                 exam_count = int(
                     connection.execute(
-                        "SELECT COUNT(*) FROM exam_attempts WHERE subject=?", (subject,)
+                        "SELECT COUNT(*) FROM exam_attempts WHERE subject=?", (subject_name,)
                     ).fetchone()[0]
                 )
             png_path, csv_path = reserve_output_paths(
-                args.output_dir, subject, generated_at
+                output_dir, subject_name, generated_at
             )
-            make_figure(rows, exam_count, subject, png_path)
+            if any(
+                path.is_symlink()
+                for path in (png_path.parent.parent, png_path.parent, png_path, csv_path)
+            ):
+                raise ValueError(f"Đường dẫn báo cáo không an toàn: {png_path}")
+            make_figure(
+                rows, exam_count, subject_name, png_path,
+                source_database_name=Path(database_path).name,
+            )
             write_csv(rows, csv_path)
-            print(f"{subject}: {png_path} | {csv_path}")
+            reports.append((subject_name, png_path, csv_path))
+    return reports
+
+
+def main() -> None:
+    args = parse_args()
+    for subject_name, png_path, csv_path in generate_reports(
+        args.database, args.output_dir, subject=args.subject
+    ):
+        print(f"{subject_name}: {png_path} | {csv_path}")
 
 
 if __name__ == "__main__":

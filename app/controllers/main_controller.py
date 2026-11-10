@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         self._bank_update_dialog: QuestionBankNotificationDialog | None = None
         self._data_import_dialog: DataImportDialog | None = None
         self._data_install_task: DataInstallTask | None = None
+        self._pending_data_install_result: DataInstallResult | None = None
         self._catalog_task: CatalogRefreshTask | None = None
         self._pending_import_code: str | None = None
         self._catalog_source = PackageCatalogSource(
@@ -258,6 +259,9 @@ class MainWindow(QMainWindow):
 
     def refresh_data(self) -> None:
         if self._closing:
+            return
+        if self._data_install_task is not None:
+            self._rescan_requested = True
             return
         if self._scan_running:
             self._rescan_requested = True
@@ -410,7 +414,12 @@ class MainWindow(QMainWindow):
 
     def _start_data_install(self, code: str) -> None:
         dialog = self._data_import_dialog
-        if dialog is None or self._data_install_task is not None or self._catalog_task is not None:
+        if (
+            dialog is None
+            or self._data_install_task is not None
+            or self._catalog_task is not None
+            or self._pending_data_install_result is not None
+        ):
             return
         try:
             self._data_package_installer.catalog.extract_file_id(code)
@@ -496,6 +505,7 @@ class MainWindow(QMainWindow):
         task.signals.completed.connect(self._data_install_completed)
         task.signals.failed.connect(self._data_install_failed)
         self._data_install_task = task
+        self._rescan_requested = True
         self.thread_pool.start(task)
 
     def _data_install_completed(self, result: DataInstallResult) -> None:
@@ -503,36 +513,40 @@ class MainWindow(QMainWindow):
             return
         self._data_install_task = None
         dialog = self._data_import_dialog
-        if result.backup_path is not None:
-            remaining = [
-                subject for name, subject in self.subjects.items()
-                if name != result.subject
-            ]
-            try:
-                self.database.sync_questions(
-                    [question for subject in remaining for question in subject.questions],
-                    [subject.name for subject in remaining],
-                )
-            except (sqlite3.Error, OSError) as exc:
-                try:
-                    SubjectManager(self.data_dir).restore(result.subject, result.backup_path)
-                    message = f"Không cập nhật được dữ liệu học; đã khôi phục bản cũ: {exc}"
-                except SubjectManagementError as restore_exc:
-                    message = f"Không cập nhật được dữ liệu học: {exc}. {restore_exc}"
-                if dialog is not None:
-                    dialog.show_error(message)
-                self.refresh_data()
-                return
-            self.subjects.pop(result.subject, None)
-            self.answer_reports.pop(result.subject, None)
-            self.home.set_subjects(remaining, self.data_dir)
-            self._reset_watch_paths(remaining)
+        self._pending_data_install_result = result
         if dialog is not None:
-            dialog.show_complete(
-                f"Đã cài {result.subject} với {result.question_count} câu hỏi."
-                + (f" Bản cũ: {result.backup_path}" if result.backup_path else "")
+            dialog.update_progress(
+                "bank", 99, "Đang đối chiếu và lưu phiên bản đáp án…"
             )
         self._rescan_requested = self._scan_running
+        self.refresh_data()
+
+    def _rollback_data_install(
+        self, result: DataInstallResult, previous_subjects: dict[str, Subject], reason: str
+    ) -> None:
+        self._pending_data_install_result = None
+        manager = SubjectManager(self.data_dir)
+        try:
+            if result.backup_path is None:
+                manager.remove(result.subject)
+            else:
+                manager.restore(result.subject, result.backup_path)
+            self.database.sync_questions(
+                [question for subject in previous_subjects.values() for question in subject.questions],
+                list(previous_subjects),
+            )
+            message = f"Không hoàn tất answer version; đã khôi phục dữ liệu trước đó: {reason}"
+        except (SubjectManagementError, sqlite3.Error, OSError) as exc:
+            message = (
+                f"Không hoàn tất answer version: {reason}. "
+                f"Cần kiểm tra vùng khôi phục và cơ sở dữ liệu: {exc}"
+            )
+            LOGGER.exception("Không thể khôi phục gói %s sau lỗi answer version", result.subject)
+        self.subjects = previous_subjects
+        self._reset_watch_paths(list(previous_subjects.values()))
+        if self._data_import_dialog is not None:
+            self._data_import_dialog.show_error(message)
+        self.home.notice.setText(message)
         self.refresh_data()
 
     def _data_install_failed(self, message: str) -> None:
@@ -542,6 +556,8 @@ class MainWindow(QMainWindow):
         dialog = self._data_import_dialog
         if dialog is not None:
             dialog.show_error(message)
+        self._rescan_requested = self._scan_running
+        self.refresh_data()
 
     def _apply_scan_result(self, scanned_dir: Path, subjects: list[Subject]) -> None:
         if self._closing:
@@ -562,34 +578,100 @@ class MainWindow(QMainWindow):
             return
         self._scan_running = False
         LOGGER.warning("Không quét được %s: %s", scanned_dir, message)
-        self.home.notice.setText(f"Không thể quét dữ liệu: {message}")
         if self._rescan_requested:
             self._rescan_requested = False
             self.refresh_data()
+            return
+        if self._pending_data_install_result is not None:
+            self._rollback_data_install(
+                self._pending_data_install_result,
+                self.subjects.copy(),
+                f"Không quét được gói mới: {message}",
+            )
+            return
+        self.home.notice.setText(f"Không thể quét dữ liệu: {message}")
 
     def _apply_subjects(self, subjects: list[Subject]) -> None:
+        previous_subjects = self.subjects.copy()
+        pending_install = self._pending_data_install_result
         selected_subject_name = (
             self.current_subject.name if self.current_subject is not None else None
         )
         refresh_subject_dashboard = isinstance(self._dynamic_page, ModeScreen)
         self.subjects = {subject.name: subject for subject in subjects}
+        if pending_install is not None and pending_install.previous_bank_version is not None:
+            try:
+                database_version = self.database.latest_bank_version(pending_install.subject)
+            except sqlite3.Error as exc:
+                self._rollback_data_install(pending_install, previous_subjects, str(exc))
+                return
+            if database_version != pending_install.previous_bank_version:
+                self._rollback_data_install(
+                    pending_install, previous_subjects,
+                    "Phiên bản đáp án trong cơ sở dữ liệu không khớp manifest cũ.",
+                )
+                return
         all_questions = [
             question for subject in subjects for question in subject.questions
         ]
-        self.database.sync_questions(
-            all_questions, [subject.name for subject in subjects]
-        )
+        try:
+            self.database.sync_questions(
+                all_questions, [subject.name for subject in subjects]
+            )
+        except (sqlite3.Error, OSError) as exc:
+            if pending_install is not None:
+                self._rollback_data_install(pending_install, previous_subjects, str(exc))
+                return
+            raise
         # Windows keeps watched files/directories open. Release their handles
         # while the answer bank atomically replaces answers.csv and manifests.
         watched_paths = self.watcher.directories() + self.watcher.files()
         if watched_paths:
             self.watcher.removePaths(watched_paths)
+        bank_error: Exception | None = None
+        bank_results: list[BankUpdateResult] = []
         try:
             bank_results = QuestionBankUpdateChecker(
                 self.database, self.settings.crop_region
             ).check(subjects, apply=True)
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            bank_error = exc
         finally:
             self._reset_watch_paths(subjects)
+        if bank_error is not None:
+            if pending_install is not None:
+                self._rollback_data_install(
+                    pending_install, previous_subjects, str(bank_error)
+                )
+                return
+            raise bank_error
+        if pending_install is not None:
+            bank_result = next(
+                (item for item in bank_results if item.subject == pending_install.subject), None
+            )
+            if bank_result is None or bank_result.errors or bank_result.bank_version < 1 or (
+                pending_install.previous_bank_version is not None
+                and (
+                    bank_result.previous_version != pending_install.previous_bank_version
+                    or bank_result.bank_version
+                    != pending_install.previous_bank_version + bool(bank_result.changes)
+                    or (bank_result.changes and not bank_result.applied)
+                )
+            ):
+                reason = (
+                    "; ".join(bank_result.errors)
+                    if bank_result is not None and bank_result.errors
+                    else "Không xác nhận được phiên bản đáp án mới."
+                )
+                self._rollback_data_install(pending_install, previous_subjects, reason)
+                return
+            self._pending_data_install_result = None
+            if self._data_import_dialog is not None:
+                self._data_import_dialog.show_complete(
+                    f"Đã cài {pending_install.subject} với {pending_install.question_count} câu hỏi; "
+                    f"answer bank v{bank_result.bank_version}."
+                    + (f" Bản cũ: {pending_install.backup_path}" if pending_install.backup_path else "")
+                )
         answer_repository = AnswerKeyRepository()
         self.answer_reports = {
             subject.name: answer_repository.load(subject.path, subject.questions)

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import re
 import unicodedata
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
 from app.config import CATEGORIES, IMAGE_EXTENSIONS
-from app.domain.models import Question, Subject
+from app.domain.models import Question, Subject, parse_option_letters
 from app.services.subject_management import inspect_tree
 
 
@@ -85,7 +84,7 @@ class DataScannerService:
                 return {}
             for row in reader:
                 relative = unicodedata.normalize("NFC", (row["image_name"] or "").strip())
-                letters = (row["option_letters"] or "").strip().upper()
-                if re.fullmatch(r"A(?:B(?:C(?:D(?:E(?:F(?:G(?:H)?)?)?)?)?)?)?", letters):
-                    result[relative] = tuple(letters)
+                letters = parse_option_letters(row["option_letters"])
+                if letters:
+                    result[relative] = letters
         return result

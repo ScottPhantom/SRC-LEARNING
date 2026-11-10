@@ -105,7 +105,7 @@ class SubjectCard(QFrame):
         self.setCursor(QCursor(Qt.PointingHandCursor))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setFixedHeight(236)
-        self.setMinimumWidth(340)
+        self.setMinimumWidth(300)
         self.setMaximumWidth(440)
 
         # Layout chính (căn lề theo body_rect nội bộ)

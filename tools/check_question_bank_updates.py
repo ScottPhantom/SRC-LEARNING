@@ -47,7 +47,7 @@ def interactive_answer_resolver(question) -> str:
     try:
         image = read_image_unicode(question.absolute_path)
         crop = crop_answer(image, DEFAULT_MASK_REGION)
-        answer = recognize(crop, question.category == MULTIPLE_CATEGORY)
+        answer = recognize(crop, question.category == MULTIPLE_CATEGORY, question.options)
     except (
         OSError,
         ValueError,

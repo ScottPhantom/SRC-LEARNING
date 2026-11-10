@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -175,7 +176,7 @@ class QuestionBankUpdateChecker:
 
         image = read_image_unicode(question.absolute_path)
         crop = crop_answer(image, self.crop_region)
-        return recognize(crop, question.category == MULTIPLE_CATEGORY)
+        return recognize(crop, question.category == MULTIPLE_CATEGORY, question.options)
 
     @staticmethod
     def _notification_change_rows(
@@ -755,3 +756,51 @@ class QuestionBankUpdateChecker:
         self, subjects: list[Subject], *, apply: bool = True
     ) -> list[BankUpdateResult]:
         return [self.check_subject(subject, apply=apply) for subject in subjects]
+
+
+def stage_replacement_answer_history(
+    previous_subject: Path, incoming_subject: Path, subject: str
+) -> int | None:
+    """Carry the device's version history into a verified replacement package.
+
+    The package supplies the new questions and answers, but its own version
+    directory must not reset or overwrite the local history. The caller stages
+    this before swapping either subject directory.
+    """
+    previous_answers = previous_subject / AnswerKeyRepository.FILE_NAME
+    previous_versions = previous_subject / VERSION_DIRECTORY
+    active_manifest = previous_versions / ACTIVE_MANIFEST
+    if not previous_answers.is_file():
+        if active_manifest.exists():
+            raise ValueError("Môn cũ có manifest nhưng thiếu answers.csv.")
+        return None
+    if previous_versions.is_symlink() or not active_manifest.is_file():
+        raise ValueError(
+            "Môn cũ chưa có answer version hợp lệ; hãy làm mới dữ liệu trước khi thay gói."
+        )
+
+    manifest_payload = json.loads(active_manifest.read_text(encoding="utf-8"))
+    if not isinstance(manifest_payload, dict):
+        raise TypeError("Manifest answer version của môn cũ không hợp lệ.")
+    version, _entries = QuestionBankUpdateChecker._load_manifest(active_manifest)
+    manifest_subject = manifest_payload.get("subject")
+    if version < 1 or manifest_subject != subject:
+        raise ValueError("Manifest answer version của môn cũ không khớp môn đang thay.")
+    snapshots = (
+        previous_versions / f"answers.v{version}.csv",
+        previous_versions / f"manifest.v{version}.json",
+    )
+    if any(path.is_symlink() or not path.is_file() for path in snapshots):
+        raise ValueError("Môn cũ thiếu bản lưu answer version đang hoạt động.")
+    if snapshots[1].read_bytes() != active_manifest.read_bytes():
+        raise ValueError("Manifest answer version của môn cũ không nhất quán.")
+
+    incoming_versions = incoming_subject / VERSION_DIRECTORY
+    if incoming_versions.is_symlink():
+        raise ValueError("Gói mới chứa answer_versions không an toàn.")
+    if incoming_versions.exists():
+        if not incoming_versions.is_dir():
+            raise ValueError("Gói mới chứa answer_versions không hợp lệ.")
+        shutil.rmtree(incoming_versions)
+    shutil.copytree(previous_versions, incoming_versions)
+    return version

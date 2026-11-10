@@ -4,6 +4,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from string import ascii_uppercase
+
+OPTION_LETTERS = tuple(ascii_uppercase)
 
 
 class FeedbackMode(str, Enum):
@@ -27,10 +30,10 @@ class Question:
 
     @property
     def options(self) -> tuple[str, ...]:
-        if self.option_letters:
-            return self.option_letters
         if self.category == "True_False":
             return ("A", "B")
+        if self.option_letters:
+            return self.option_letters
         return ("A", "B", "C", "D")
 
 
@@ -148,7 +151,14 @@ class ExamQuestion:
 
 
 def normalize_answer(value: str) -> str:
-    """Return unique A-H characters in canonical order."""
-    valid_options = "ABCDEFGH"
-    chars = {char for char in (value or "").upper() if char in valid_options}
-    return "".join(char for char in valid_options if char in chars)
+    """Return unique A-Z characters in canonical order."""
+    chars = {char for char in (value or "").upper() if char in OPTION_LETTERS}
+    return "".join(char for char in OPTION_LETTERS if char in chars)
+
+
+def parse_option_letters(value: str) -> tuple[str, ...]:
+    """Accept an explicit contiguous choice range (AB through ABC...Z)."""
+    letters = (value or "").strip().upper()
+    if 2 <= len(letters) <= len(OPTION_LETTERS) and letters == ascii_uppercase[:len(letters)]:
+        return tuple(letters)
+    return ()

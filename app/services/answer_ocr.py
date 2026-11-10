@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytesseract
 
-from app.domain.models import normalize_answer
+from app.domain.models import OPTION_LETTERS, normalize_answer
 
 
 def read_image_unicode(path: Path) -> np.ndarray:
@@ -37,18 +37,25 @@ def preprocess(crop: np.ndarray) -> np.ndarray:
     return cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
 
-def recognize(crop: np.ndarray, multiple: bool) -> str:
+def recognize(
+    crop: np.ndarray, multiple: bool, options: tuple[str, ...] | None = None
+) -> str:
     """Nhận diện đáp án bằng nhiều biến thể, kể cả ký tự viết thường."""
 
+    allowed = options or OPTION_LETTERS
+    whitelist = "".join(allowed)
     candidates = (crop, preprocess(crop))
-    expected_lengths = range(2, 9) if multiple else (1,)
+    expected_lengths = range(2, len(allowed) + 1) if multiple else (1,)
     for candidate in candidates:
         for psm in (7, 6, 10):
             raw = pytesseract.image_to_string(
                 candidate,
-                config=f"--psm {psm} -c tessedit_char_whitelist=ABCDEFGHabcdefgh",
+                config=(
+                    f"--psm {psm} -c tessedit_char_whitelist="
+                    f"{whitelist}{whitelist.lower()}"
+                ),
             )
             answer = normalize_answer(raw)
-            if len(answer) in expected_lengths:
+            if len(answer) in expected_lengths and set(answer) <= set(allowed):
                 return answer
     return ""

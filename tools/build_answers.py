@@ -117,10 +117,13 @@ def publish_answers(
 
 def answer_rule(question) -> str:
     if question.category == MULTIPLE_CATEGORY:
-        return "nhập 2–4 ký tự khác nhau trong A–D, ví dụ AD"
+        return (
+            f"nhập 2–{len(question.options)} ký tự khác nhau trong "
+            f"A–{question.options[-1]}, ví dụ A{question.options[-1]}"
+        )
     if question.category == "True_False":
         return "nhập A hoặc B"
-    return "nhập một ký tự A, B, C hoặc D"
+    return f"nhập một ký tự trong A–{question.options[-1]}"
 
 
 def prompt_for_manual_answer(
@@ -184,7 +187,7 @@ def process_subject(subject, args: argparse.Namespace) -> tuple[int, int]:
         try:
             image = read_image_unicode(question.absolute_path)
             crop = crop_answer(image, args.region)
-            answer = recognize(crop, question.category == MULTIPLE_CATEGORY)
+            answer = recognize(crop, question.category == MULTIPLE_CATEGORY, question.options)
             if not repository.validate(question, answer):
                 answer = ""
         except (

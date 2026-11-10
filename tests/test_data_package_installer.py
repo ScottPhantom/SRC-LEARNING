@@ -4,6 +4,8 @@ import csv
 import hashlib
 import os
 import shutil
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 from PIL import Image
 
 from app import config
+from app.repositories.database import Database
 from app.services.data_package_installer import (
     DataPackageCatalog,
     DataPackageError,
@@ -20,20 +23,25 @@ from app.services.data_package_installer import (
 )
 from app.services.data_scanner import DataScannerService
 from app.services.package_catalog_source import PackageCatalogSource
+from app.services.question_bank_updates import QuestionBankUpdateChecker
 from app.services.subject_management import SubjectManagementError, SubjectManager
 
 
-def make_subject_archive(root: Path, subject: str = "AIL303m") -> Path:
+def make_subject_archive(
+    root: Path, subject: str = "AIL303m", question_count: int = 1
+) -> Path:
     source = root / "source" / "DATA" / subject
-    image_path = source / "Selections_1_choose" / "Câu 1.png"
-    image_path.parent.mkdir(parents=True)
-    Image.new("RGB", (120, 80), "white").save(image_path)
+    for index in range(1, question_count + 1):
+        image_path = source / "Selections_1_choose" / f"Câu {index}.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (120, 80), "white").save(image_path)
     with (source / "answers.csv").open(
         "w", encoding="utf-8-sig", newline=""
     ) as handle:
         writer = csv.writer(handle)
         writer.writerow(["image_name", "correct_answer"])
-        writer.writerow(["Selections_1_choose/Câu 1.png", "A"])
+        for index in range(1, question_count + 1):
+            writer.writerow([f"Selections_1_choose/Câu {index}.png", "A"])
     archive = root / f"{subject}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for path in sorted(source.rglob("*")):
@@ -155,6 +163,53 @@ def test_installer_rejects_question_count_mismatch_before_writing(tmp_path: Path
     assert not (destination / original.subject).exists()
 
 
+def test_installer_requires_complete_valid_choice_metadata_when_declared(
+    tmp_path: Path,
+) -> None:
+    make_subject_archive(tmp_path, question_count=2)
+    subject = tmp_path / "source" / "DATA" / "AIL303m"
+    metadata = subject / "question_metadata.csv"
+    with metadata.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "option_letters"])
+        writer.writerow(["Selections_1_choose/Câu 1.png", "ABCDEFGHIJ"])
+    with pytest.raises(DataPackageError, match="thiếu lựa chọn"):
+        DataPackageInstaller._validate_subject(tmp_path / "source", "AIL303m", lambda *_: None)
+
+    with metadata.open("a", encoding="utf-8", newline="") as handle:
+        csv.writer(handle).writerow(["Selections_1_choose/Câu 2.png", "ABCE"])
+    with pytest.raises(DataPackageError, match="không hợp lệ"):
+        DataPackageInstaller._validate_subject(tmp_path / "source", "AIL303m", lambda *_: None)
+
+    with metadata.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "option_letters"])
+        writer.writerow(["Selections_1_choose/Câu 1.png", "ABCDEFGHIJ"])
+        writer.writerow(["Selections_1_choose/Câu 2.png", "ABCD"])
+    with (subject / "answers.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "correct_answer"])
+        writer.writerow(["Selections_1_choose/Câu 1.png", "J"])
+        writer.writerow(["Selections_1_choose/Câu 2.png", "A"])
+    _, question_count = DataPackageInstaller._validate_subject(
+        tmp_path / "source", "AIL303m", lambda *_: None
+    )
+    assert question_count == 2
+
+
+def test_installer_allows_metadata_without_choice_column(tmp_path: Path) -> None:
+    make_subject_archive(tmp_path)
+    subject = tmp_path / "source" / "DATA" / "AIL303m"
+    (subject / "question_metadata.csv").write_text(
+        "image_name,source\nSelections_1_choose/Câu 1.png,slide\n",
+        encoding="utf-8-sig",
+    )
+    _, question_count = DataPackageInstaller._validate_subject(
+        tmp_path / "source", "AIL303m", lambda *_: None
+    )
+    assert question_count == 1
+
+
 def test_installer_rejects_archive_size_mismatch(tmp_path: Path) -> None:
     archive = make_subject_archive(tmp_path)
     installer = installer_for(archive)
@@ -224,10 +279,39 @@ def test_default_catalog_url_is_published_google_ids_csv() -> None:
     assert "output=csv" in config.CATALOG_CSV_URL
 
 
+def test_release_qa_can_use_an_isolated_state_directory(tmp_path: Path) -> None:
+    profile = tmp_path / "qa state"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from app.config import STATE_DIR, DEFAULT_DATA_DIR, DEFAULT_DB_PATH; "
+            "print(STATE_DIR); print(DEFAULT_DATA_DIR); print(DEFAULT_DB_PATH)",
+        ],
+        env={
+            **os.environ,
+            "SRC_LEARNING_STATE_DIR": str(profile),
+            "PYTHONIOENCODING": "utf-8",
+        },
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+    )
+    assert [Path(line) for line in completed.stdout.splitlines()] == [
+        profile.resolve(),
+        profile.resolve() / "DATA",
+        profile.resolve() / "study_progress.sqlite3",
+    ]
+    assert not profile.exists()
+
+
 def test_missing_catalog_url_explains_bundled_fallback(tmp_path: Path) -> None:
     result = PackageCatalogSource("", tmp_path / "catalog.csv").load()
     assert result.source == "bản đóng gói"
     assert "chưa được cấu hình" in result.warning
+    package = result.catalog.resolve("1r82uwHDR7LVfpVv74W75OZ6xWh-2odrP")
+    assert package.expected_questions is not None
+    assert package.expected_questions > 0
 
 
 def test_installer_validates_and_atomically_installs_subject(tmp_path: Path) -> None:
@@ -366,6 +450,100 @@ def test_duplicate_requires_consent_and_replacement_keeps_backup(tmp_path: Path)
     assert result.backup_path is not None
     assert (result.backup_path / "old.txt").read_text(encoding="utf-8") == "original"
     assert (old / "answers.csv").is_file()
+
+
+def test_drive_replacement_creates_next_answer_version_and_keeps_history(
+    tmp_path: Path,
+) -> None:
+    archive = make_subject_archive(tmp_path)
+    data = tmp_path / "app" / "DATA"
+    installer_for(archive).install("approved-drive-file-id", data)
+    database = Database(tmp_path / "progress.sqlite3")
+    old_subject = DataScannerService(data).scan()[0]
+    database.sync_questions(old_subject.questions, [old_subject.name])
+    checker = QuestionBankUpdateChecker(database, (0.0, 0.9, 0.25, 0.1))
+    assert checker.check_subject(old_subject).initialized
+
+    # A package's own version directory must not replace the device's history.
+    incoming_versions = tmp_path / "source" / "DATA" / "AIL303m" / "answer_versions"
+    incoming_versions.mkdir()
+    (incoming_versions / "manifest.json").write_text(
+        '{"bank_version": 99}', encoding="utf-8"
+    )
+    updated_archive = make_subject_archive(tmp_path, question_count=2)
+    result = installer_for(updated_archive).install(
+        "approved-drive-file-id", data, replace_existing=True
+    )
+    assert result.previous_bank_version == 1
+    assert result.backup_path is not None
+    assert (result.backup_path / "answer_versions" / "answers.v1.csv").is_file()
+
+    new_subject = DataScannerService(data).scan()[0]
+    database.sync_questions(new_subject.questions, [new_subject.name])
+    update = checker.check_subject(new_subject)
+    assert update.applied
+    assert (update.previous_version, update.bank_version) == (1, 2)
+    assert len(update.added) == 1
+    assert database.latest_bank_version("AIL303m") == 2
+    assert (new_subject.path / "answer_versions" / "answers.v1.csv").is_file()
+    assert (new_subject.path / "answer_versions" / "answers.v2.csv").is_file()
+    assert database.pending_question_bank_notification("AIL303m") is not None
+
+    third_archive = make_subject_archive(tmp_path, question_count=3)
+    third_result = installer_for(third_archive).install(
+        "approved-drive-file-id", data, replace_existing=True
+    )
+    assert third_result.previous_bank_version == 2
+    third_subject = DataScannerService(data).scan()[0]
+    database.sync_questions(third_subject.questions, [third_subject.name])
+    third_update = checker.check_subject(third_subject)
+    assert third_update.applied
+    assert (third_update.previous_version, third_update.bank_version) == (2, 3)
+    assert all(
+        (third_subject.path / "answer_versions" / f"answers.v{version}.csv").is_file()
+        for version in (1, 2, 3)
+    )
+    database.close()
+
+
+def test_drive_replacement_without_changes_keeps_current_answer_version(
+    tmp_path: Path,
+) -> None:
+    archive = make_subject_archive(tmp_path)
+    data = tmp_path / "app" / "DATA"
+    installer_for(archive).install("approved-drive-file-id", data)
+    database = Database(tmp_path / "progress.sqlite3")
+    subject = DataScannerService(data).scan()[0]
+    database.sync_questions(subject.questions, [subject.name])
+    checker = QuestionBankUpdateChecker(database, (0.0, 0.9, 0.25, 0.1))
+    checker.check_subject(subject)
+
+    result = installer_for(archive).install(
+        "approved-drive-file-id", data, replace_existing=True
+    )
+    assert result.previous_bank_version == 1
+    subject = DataScannerService(data).scan()[0]
+    database.sync_questions(subject.questions, [subject.name])
+    update = checker.check_subject(subject)
+    assert not update.changes and update.bank_version == 1
+    assert not (subject.path / "answer_versions" / "answers.v2.csv").exists()
+    database.close()
+
+
+def test_drive_replacement_rejects_existing_answers_without_version_baseline(
+    tmp_path: Path,
+) -> None:
+    archive = make_subject_archive(tmp_path)
+    data = tmp_path / "app" / "DATA"
+    old = data / "AIL303m"
+    old.mkdir(parents=True)
+    (old / "answers.csv").write_text("old answers", encoding="utf-8")
+    with pytest.raises(DataPackageError, match="chưa có answer version"):
+        installer_for(archive).install(
+            "approved-drive-file-id", data, replace_existing=True
+        )
+    assert (old / "answers.csv").read_text(encoding="utf-8") == "old answers"
+    assert not (tmp_path / "app" / ".src-learning-recovery").exists()
 
 
 def test_replace_rolls_back_if_new_install_fails(tmp_path: Path, monkeypatch) -> None:

@@ -14,7 +14,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app.ui.answer_options import AnswerOptionsWidget, refresh_style
+from app.ui.answer_options import (
+    ANSWER_BUTTON_HEIGHT,
+    ANSWER_ROW_SPACING,
+    AnswerOptionsWidget,
+    refresh_style,
+)
 
 
 class QuestionNavigationGrid(QWidget):
@@ -105,6 +110,8 @@ class QuestionNavigationGrid(QWidget):
 class AssessmentSidebar(QFrame):
     """Sidebar dùng chung: đáp án, điều hướng câu hỏi và vùng action."""
 
+    MAX_ANSWER_HEIGHT = 230
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("assessmentSidebar")
@@ -118,7 +125,15 @@ class AssessmentSidebar(QFrame):
         self.answer_group = QGroupBox("Đáp án")
         answer_layout = QVBoxLayout(self.answer_group)
         self.answer_options = AnswerOptionsWidget()
-        answer_layout.addWidget(self.answer_options)
+        self.answer_scroll = QScrollArea()
+        self.answer_scroll.setObjectName("answerOptionsScroll")
+        self.answer_scroll.setWidgetResizable(True)
+        self.answer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.answer_scroll.setFrameShape(QFrame.NoFrame)
+        self.answer_scroll.viewport().setAutoFillBackground(False)
+        self.answer_scroll.setWidget(self.answer_options)
+        self.answer_options.options_changed.connect(self._resize_answer_area)
+        answer_layout.addWidget(self.answer_scroll)
         layout.addWidget(self.answer_group)
 
         self.navigation = QuestionNavigationGrid()
@@ -132,6 +147,18 @@ class AssessmentSidebar(QFrame):
         self.actions = QVBoxLayout()
         self.actions.setSpacing(9)
         layout.addLayout(self.actions)
+
+    def _resize_answer_area(self, option_count: int) -> None:
+        """Show all ordinary choices; scroll only when the list grows taller."""
+        rows = max(1, (option_count + 1) // 2)
+        content_height = rows * ANSWER_BUTTON_HEIGHT + (rows - 1) * ANSWER_ROW_SPACING
+        # The QScrollArea may retain the previous question's content geometry
+        # after a live 4→many choice transition unless its minimum is explicit.
+        self.answer_options.setMinimumHeight(content_height)
+        content_height += 2  # Keep the last row clear of viewport rounding.
+        self.answer_scroll.setFixedHeight(min(content_height, self.MAX_ANSWER_HEIGHT))
+        self.answer_group.updateGeometry()
+        self.updateGeometry()
 
     def add_action(self, button: QPushButton) -> None:
         button.setMinimumHeight(42)

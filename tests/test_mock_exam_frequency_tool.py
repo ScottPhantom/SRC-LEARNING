@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
+from tools import analyze_mock_exam_frequency as analyzer
 from tools.analyze_mock_exam_frequency import (
     DEFAULT_DATABASE_PATH,
     PROJECT_ROOT,
@@ -51,7 +52,7 @@ def test_output_paths_use_subject_date_and_unique_timestamp(tmp_path) -> None:
     assert second_csv.stem.endswith("_02")
 
 
-def test_figure_renderer_writes_expected_canvas(tmp_path) -> None:
+def test_figure_renderer_writes_expected_canvas(tmp_path, monkeypatch) -> None:
     rows = [
         {
             "question_id": f"q-{index}",
@@ -73,8 +74,21 @@ def test_figure_renderer_writes_expected_canvas(tmp_path) -> None:
         )
     ]
     destination = tmp_path / "figure.png"
+    footers: list[str] = []
+    original_draw_wrapped_text = analyzer.draw_wrapped_text
 
-    make_figure(rows, exam_count=3, subject="TEST101", destination=destination)
+    def record_footer(draw, text, **kwargs):
+        footers.append(text)
+        return original_draw_wrapped_text(draw, text, **kwargs)
+
+    monkeypatch.setattr(analyzer, "draw_wrapped_text", record_footer)
+
+    make_figure(
+        rows, exam_count=3, subject="TEST101", destination=destination,
+        source_database_name="test_progress.sqlite3",
+    )
 
     with Image.open(destination) as image:
         assert image.size == (1800, 1450)
+    assert len(footers) == 1
+    assert "Nguồn: test_progress.sqlite3" in footers[0]

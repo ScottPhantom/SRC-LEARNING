@@ -9,6 +9,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(project / "app" / "ui" / "assets"), "app/ui/assets"),
+        (str(project / "app" / "resources" / "brand"), "app/resources/brand"),
         (
             str(project / "app" / "resources" / "data_manifest.json"),
             "app/resources",
@@ -45,6 +46,7 @@ collect = COLLECT(
 app = BUNDLE(
     collect,
     name="SRC Learning.app",
+    icon=str(project / "app" / "resources" / "brand" / "src-learning.icns"),
     bundle_identifier="io.srcproject.srclearning",
     info_plist={
         "CFBundleDisplayName": "SRC Learning",

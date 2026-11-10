@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+import sys
 
 project = Path(SPECPATH)
 
@@ -9,6 +10,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(project / "app" / "ui" / "assets"), "app/ui/assets"),
+        (str(project / "app" / "resources" / "brand"), "app/resources/brand"),
         (
             str(project / "app" / "resources" / "data_manifest.json"),
             "app/resources",
@@ -34,4 +36,5 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
+    icon=str(project / "app" / "resources" / "brand" / "src-learning.ico") if sys.platform == "win32" else None,
 )

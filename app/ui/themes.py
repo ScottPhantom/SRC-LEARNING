@@ -76,6 +76,8 @@ QLabel#settingsPreviewPlaceholderText {
 }
 QLabel#homeTitle { color: #1d1d1f; font-size: 34px; font-weight: 700; letter-spacing: -0.5px; }
 QLabel#homeSubtitle { color: #6e6e73; font-size: 15px; font-weight: 400; }
+QLabel#homeYearTitle { color: #1d1d1f; font-size: 24px; font-weight: 700; padding-top: 14px; }
+QLabel#homeTermTitle { color: #334155; font-size: 16px; font-weight: 600; padding-top: 4px; }
 
 QFrame#homeStatus {
   background: transparent; border: none;
@@ -161,7 +163,7 @@ QLabel#dataImportStatus { color: #475569; font-size: 12px; font-weight: 700; }
 QLabel#dataImportStatus[error="true"] { color: #B42318; }
 QLineEdit#dataImportCodeInput {
   background: #ffffff; color: #172033; border: 1px solid #94a3b8;
-  border-radius: 9px; padding: 10px 12px;
+  border-radius: 9px; min-height: 42px; padding: 4px 12px;
 }
 QLineEdit#dataImportCodeInput:focus { border: 2px solid #0A84FF; }
 QProgressBar#dataImportProgress {
@@ -261,11 +263,13 @@ QFrame#assessmentSidebar QGroupBox {
   border: 0; margin-top: 18px; font-weight: 700;
 }
 QFrame#assessmentSidebar QGroupBox::title { subcontrol-origin: margin; left: 0; }
+QScrollArea#answerOptionsScroll { background: transparent; border: 0; }
+QScrollArea#answerOptionsScroll > QWidget > QWidget { background: transparent; }
 QPushButton#answerOptionButton {
-  background: #eef2f7; color: #172033; border: 1px solid #cbd5e1;
+  background: transparent; color: #172033; border: 1px solid #cbd5e1;
   border-radius: 11px; padding: 10px; font-size: 19px; font-weight: 800;
 }
-QPushButton#answerOptionButton:hover { background: #dbeafe; border-color: #60a5fa; }
+QPushButton#answerOptionButton:hover { background: #eff6ff; border-color: #60a5fa; }
 QPushButton#answerOptionButton:checked {
   background: #0A84FF; color: white; border-color: #0A84FF;
 }
@@ -276,9 +280,11 @@ QPushButton#answerOptionButton[answerState="wrong"] {
   background: #FDECEC; color: #C42B1C; border: 2px solid #E5484D;
 }
 QLabel#answerShortcutHint {
-  color: #64748b; background: transparent; border: 0; font-size: 10px; font-weight: 700;
+  color: #475569; background: transparent; border: 0; font-size: 10px; font-weight: 700;
 }
-QPushButton#answerOptionButton:checked QLabel#answerShortcutHint { color: #ffffff; }
+QLabel#answerShortcutHint[hintTone="selected"] { color: #ffffff; }
+QLabel#answerShortcutHint[hintTone="correct"] { color: #16803A; }
+QLabel#answerShortcutHint[hintTone="wrong"] { color: #C42B1C; }
 QLabel#navigationSummary { font-size: 14px; font-weight: 700; }
 QScrollArea#questionGridScroll { background: transparent; border: 0; }
 QScrollArea#questionGridScroll > QWidget > QWidget { background: transparent; }
@@ -406,6 +412,8 @@ QLabel#settingsPreviewPlaceholderText {
 }
 QLabel#homeTitle { color: #f5f5f7; font-size: 34px; font-weight: 700; letter-spacing: -0.5px; }
 QLabel#homeSubtitle { color: #a1a1a6; font-size: 15px; font-weight: 400; }
+QLabel#homeYearTitle { color: #f5f5f7; font-size: 24px; font-weight: 700; padding-top: 14px; }
+QLabel#homeTermTitle { color: #cbd5e1; font-size: 16px; font-weight: 600; padding-top: 4px; }
 
 QFrame#homeStatus {
   background: transparent; border: none;
@@ -491,7 +499,7 @@ QLabel#dataImportStatus { color: #CBD5E1; font-size: 12px; font-weight: 700; }
 QLabel#dataImportStatus[error="true"] { color: #FF8A82; }
 QLineEdit#dataImportCodeInput {
   background: #11141A; color: #F5F5F7; border: 1px solid #515866;
-  border-radius: 9px; padding: 10px 12px;
+  border-radius: 9px; min-height: 42px; padding: 4px 12px;
 }
 QLineEdit#dataImportCodeInput:focus { border: 2px solid #60A5FA; }
 QProgressBar#dataImportProgress {
@@ -591,11 +599,13 @@ QFrame#assessmentSidebar QGroupBox {
   border: 0; margin-top: 18px; font-weight: 700;
 }
 QFrame#assessmentSidebar QGroupBox::title { subcontrol-origin: margin; left: 0; }
+QScrollArea#answerOptionsScroll { background: transparent; border: 0; }
+QScrollArea#answerOptionsScroll > QWidget > QWidget { background: transparent; }
 QPushButton#answerOptionButton {
-  background: #273345; color: #e5e7eb; border: 1px solid #4b5563;
+  background: transparent; color: #e5e7eb; border: 1px solid #4b5563;
   border-radius: 11px; padding: 10px; font-size: 19px; font-weight: 800;
 }
-QPushButton#answerOptionButton:hover { background: #334155; border-color: #60a5fa; }
+QPushButton#answerOptionButton:hover { background: #243043; border-color: #60a5fa; }
 QPushButton#answerOptionButton:checked {
   background: #0A84FF; color: white; border-color: #0A84FF;
 }
@@ -608,7 +618,9 @@ QPushButton#answerOptionButton[answerState="wrong"] {
 QLabel#answerShortcutHint {
   color: #94a3b8; background: transparent; border: 0; font-size: 10px; font-weight: 700;
 }
-QPushButton#answerOptionButton:checked QLabel#answerShortcutHint { color: #ffffff; }
+QLabel#answerShortcutHint[hintTone="selected"] { color: #ffffff; }
+QLabel#answerShortcutHint[hintTone="correct"] { color: #30D158; }
+QLabel#answerShortcutHint[hintTone="wrong"] { color: #FF453A; }
 QLabel#navigationSummary { font-size: 14px; font-weight: 700; }
 QScrollArea#questionGridScroll { background: transparent; border: 0; }
 QScrollArea#questionGridScroll > QWidget > QWidget { background: transparent; }

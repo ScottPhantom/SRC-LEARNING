@@ -5,6 +5,9 @@ from PyQt5.QtWidgets import QGridLayout, QLabel, QPushButton, QSizePolicy, QWidg
 
 from app.domain.models import Question, normalize_answer
 
+ANSWER_BUTTON_HEIGHT = 58
+ANSWER_ROW_SPACING = 10
+
 
 def refresh_style(widget: QWidget) -> None:
     widget.style().unpolish(widget)
@@ -15,19 +18,40 @@ def refresh_style(widget: QWidget) -> None:
 class AnswerOptionButton(QPushButton):
     """Nút đáp án bo góc có nhãn phím tắt ở góc trên-phải."""
 
-    def __init__(self, option: str, shortcut_number: int, parent=None):
-        super().__init__(option, parent)
+    def __init__(
+        self,
+        option: str,
+        shortcut_number: int,
+        parent=None,
+        *,
+        label: str | None = None,
+        shortcut_label: str | None = None,
+    ):
+        display_label = label if label is not None else option
+        super().__init__(display_label, parent)
         self.option = option
+        default_shortcut = str(shortcut_number) if shortcut_number <= 9 else option
+        shortcut = shortcut_label if shortcut_label is not None else default_shortcut
         self.setObjectName("answerOptionButton")
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumSize(72, 58)
+        self.setMinimumSize(72, ANSWER_BUTTON_HEIGHT)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setAccessibleName(f"Đáp án {option}, phím {shortcut_number}")
-        self.shortcut_hint = QLabel(str(shortcut_number), self)
+        self.setAccessibleName(f"Đáp án {display_label}, phím {shortcut}")
+        self.shortcut_hint = QLabel(shortcut, self)
         self.shortcut_hint.setObjectName("answerShortcutHint")
         self.shortcut_hint.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.shortcut_hint.adjustSize()
+        self.toggled.connect(self._sync_shortcut_tone)
+        self._sync_shortcut_tone()
+
+    def _sync_shortcut_tone(self, _checked: bool = False) -> None:
+        state = self.property("answerState")
+        tone = state if state in {"correct", "wrong"} else (
+            "selected" if self.isChecked() else "neutral"
+        )
+        self.shortcut_hint.setProperty("hintTone", tone)
+        refresh_style(self.shortcut_hint)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -42,13 +66,14 @@ class AnswerOptionsWidget(QWidget):
     """Lưới đáp án dùng chung cho Mock Exam và Cramming."""
 
     selection_changed = pyqtSignal(str)
+    options_changed = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._layout = QGridLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setHorizontalSpacing(10)
-        self._layout.setVerticalSpacing(10)
+        self._layout.setVerticalSpacing(ANSWER_ROW_SPACING)
         self.option_widgets: list[AnswerOptionButton] = []
         self._question: Question | None = None
 
@@ -65,8 +90,15 @@ class AnswerOptionsWidget(QWidget):
         self._question = question
         selected = set(normalize_answer(selected_answer))
         correct = set(normalize_answer(correct_answer))
+        is_true_false = question.category == "True_False"
         for index, option in enumerate(question.options):
-            button = AnswerOptionButton(option, index + 1, self)
+            button = AnswerOptionButton(
+                option,
+                index + 1,
+                self,
+                label=("True" if option == "A" else "False") if is_true_false else None,
+                shortcut_label=option if is_true_false else None,
+            )
             button.setChecked(option in selected)
             button.setEnabled(not read_only)
             state = "neutral"
@@ -76,11 +108,13 @@ class AnswerOptionsWidget(QWidget):
                 elif option in selected:
                     state = "wrong"
             button.setProperty("answerState", state)
+            button._sync_shortcut_tone()
             button.clicked.connect(
                 lambda checked, current=button: self._option_clicked(current, checked)
             )
             self._layout.addWidget(button, index // 2, index % 2)
             self.option_widgets.append(button)
+        self.options_changed.emit(len(self.option_widgets))
 
     def selected_answer(self) -> str:
         return normalize_answer(

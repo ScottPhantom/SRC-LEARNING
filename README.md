@@ -61,9 +61,17 @@ Selections_Multiple_choose/Câu 100.png,BCD
 
 Quy tắc đáp án:
 
-- `Selections_1_choose`, `Fill_blanks`: một ký tự A–D.
-- `True_False`: A hoặc B.
-- `Selections_Multiple_choose`: 2–4 ký tự khác nhau A–D, ví dụ `ACD`.
+- `Selections_1_choose`, `Fill_blanks`: một ký tự trong các lựa chọn của câu.
+- `True_False`: A = True, B = False; trên giao diện nhấn phím A/B tương ứng.
+- `Selections_Multiple_choose`: từ 2 ký tự khác nhau trở lên trong các lựa chọn
+  của câu, ví dụ `ACD` hoặc `CE`.
+
+Ngân hàng cũ không khai báo số lựa chọn dùng mặc định A–D (Đúng/Sai dùng A–B).
+Câu có lựa chọn E trở lên phải có `question_metadata.csv` trong gói môn, với
+hai cột `image_name,option_letters`; ví dụ
+`Selections_1_choose/Q107.png,ABCDE`. Khi dùng cột `option_letters`, khai báo
+đủ mọi ảnh trong môn bằng dãy liên tục từ A đến chữ cuối (tối đa Z). Gói tải
+từ Drive bị từ chối nếu metadata thiếu, trùng hoặc có dãy lựa chọn không hợp lệ.
 
 Câu chưa có đáp án hợp lệ vẫn có thể dùng trong Flash Cards. Học cấp tốc và Mock Exam chỉ sử dụng câu có đáp án hợp lệ.
 
@@ -114,6 +122,61 @@ Khi chạy từ source, ứng dụng mặc định đọc dữ liệu tại `DAT
 tại `study_progress.sqlite3`. Bản đóng gói lưu cả database và dữ liệu tải về
 trong `~/.luyen_thi_hinh_anh/`, vì thư mục cài đặt có thể không cho phép ghi.
 Người dùng vẫn có thể đổi thư mục dữ liệu trong phần Cài đặt.
+Khi kiểm thử một bản build, có thể đặt biến `SRC_LEARNING_STATE_DIR` cho tiến
+trình app, trỏ tới một thư mục trống riêng. Database, log, bộ nhớ đệm danh mục
+và DATA mặc định của lần chạy đó nằm trong thư mục riêng; khi không đặt biến,
+ứng dụng giữ nguyên vị trí dữ liệu mặc định.
+
+### Chạy các môn thử với `-t`
+
+Từ thư mục `SRC-LEARNING`, chạy:
+
+```bash
+python main.py -t
+```
+
+App mở thẳng giao diện Thư viện như khi chạy không có cờ; không hiện launcher,
+nhãn hay tiêu đề "test". Khác biệt chỉ ở nguồn dữ liệu và tiến độ: chế độ này
+đọc các thư mục môn có tên kết thúc bằng `_t` trong
+`.src-learning-test/data/` và lưu DB tại
+`.src-learning-test/test_progress.sqlite3` (log tại
+`.src-learning-test/study_app.log`). `DATA/` và `study_progress.sqlite3` của
+app thường không bị sử dụng. Toàn bộ `.src-learning-test/` là dữ liệu local
+và bị `.gitignore` loại khỏi Git.
+
+Để thêm một môn thử, chép **nguyên thư mục** `TênMôn_t/` vào
+`.src-learning-test/data/`, hoặc nhấn nút `+` rồi chọn thư mục nguồn: app sẽ
+kiểm tra và tạo một bản sao vật lý. Môn mới xuất hiện trên Home sau khi nhấn
+**Làm mới** hoặc mở lại app. Môn thử của các mã đã biết (ví dụ `AIL303M_t`)
+được xếp vào cùng học kỳ với mã gốc; môn chưa có học kỳ có thể khai báo
+`academic_term.json` trong thư mục môn. Trong Cài đặt, đường dẫn DATA được khóa
+để không vô tình chuyển sang dữ liệu thường; Quản lý môn học chỉ tác động lên bản thử.
+Nếu muốn chỉnh ảnh, `answers.csv` hay metadata, hãy chỉnh **bản sao** trong
+`.src-learning-test/data/TênMôn_t/` khi app đã đóng, rồi mở lại. Sửa thư mục
+nguồn ban đầu sẽ không tự đồng bộ vào bản sao.
+
+Bản sao hiện có là `AIL303M_t` với 500 câu học. Riêng môn này, Mock Exam chỉ
+dùng 154 ảnh liệt kê trong `exam_first_154.json`; môn thử khác không có giới
+hạn đặc biệt. Chế độ này mới được kiểm thử từ source trên macOS; dữ liệu thử
+không được đưa vào bản phát hành Windows.
+
+### Xuất thống kê môn học với `-ss`
+
+```bash
+python main.py -ss       # dữ liệu và tiến độ app thường
+python main.py -t -ss    # chỉ các môn *_t và tiến độ thử
+```
+
+Lệnh `-ss` tạo báo cáo rồi thoát, không mở giao diện. Bản thường ghi JSON tại
+`docs/subject_statistics.json` và PNG/CSV EDA Mock Exam cho từng môn tại
+`docs/<môn>/Date-of-Statistical_<ngày>/`. Bản thử ghi JSON tại
+`docs/Test_Ver/subject_statistics.json` và PNG/CSV tại
+`docs/Test_Ver/<môn>_t/Date-of-Statistical_<ngày>/`. JSON chứa số thẻ mới/
+chưa thuộc/đã thuộc, toàn bộ câu chưa học và tối đa 20 câu lỗi sai mỗi loại,
+đúng như màn hình "Thống kê môn ... & Ôn tập nhanh". PNG/CSV là thống kê tần
+suất câu hỏi Mock Exam dành cho người phát triển; không phải biểu đồ của hai
+tab giao diện. Hai chế độ đọc database riêng; báo cáo chứa dữ liệu cá nhân và
+được Git bỏ qua. Xem thêm `docs/Test_Ver/README.md` để hiểu bản thử.
 
 ### Thêm môn học từ Google Drive
 
@@ -128,6 +191,14 @@ Người dùng vẫn có thể đổi thư mục dữ liệu trong phần Cài �
 tồn tại, người dùng phải xác nhận thay thế. Dữ liệu cũ được giữ nguyên khi tải,
 checksum, giải nén hoặc xác minh thất bại.
 
+Khi thay một môn đã cài, app chuyển lịch sử `answer_versions` **trên máy người
+dùng** sang gói đã xác minh, rồi so bộ câu hỏi/đáp án mới với manifest đang
+hoạt động. Có thay đổi thì tạo `vN+1` và thông báo thay đổi; gói không đổi vẫn
+giữ `vN`. Lịch sử version kèm trong ZIP không được ghi đè lịch sử trên máy.
+App chỉ báo cài thành công sau khi cả dữ liệu lẫn answer version được lưu;
+nếu bước phiên bản lỗi, app khôi phục môn cũ. Môn cũ có `answers.csv` nhưng
+chưa có manifest version phải được làm mới/quét lại trước khi thay gói.
+
 Danh mục trực tuyến do chủ dự án quản lý trong tab `GOOGLE_IDS` của Google Sheet
 `SRC_APP`. Chỉ những dòng có cột `App manifest` bằng chính xác `Đã bật` mới
 được app chấp nhận. Mỗi dòng được bật phải có Google file ID, SHA-256 ZIP,
@@ -138,6 +209,8 @@ lưu gần nhất; nếu chưa có, app chỉ nhận các gói trong manifest đ
 CSV hợp lệ mới thay thế bản lưu cũ, còn dữ liệu sai không được ghi đè. Việc tắt
 một môn trên Sheet chỉ có hiệu lực ngay với thiết bị tải được danh mục mới;
 thiết bị offline vẫn có thể dùng danh mục đã lưu đến lần kết nối tiếp theo.
+Manifest đóng kèm là bản chụp tại thời điểm build; nếu ZIP trên Drive đã đổi,
+ứng dụng cần đọc được CSV mới để lấy checksum và số câu đúng trước khi cài.
 
 URL CSV công khai của riêng tab `GOOGLE_IDS` (`gid=105`) đã được tích hợp làm
 nguồn mặc định cho các bản build mới. Nếu về sau phải đổi URL xuất bản, đặt tệp
@@ -148,7 +221,8 @@ trực tuyến, app dùng bản hợp lệ đã lưu từ trước hoặc manife
 URL chỉnh sửa Sheet hoặc URL export của Sheet riêng tư không dùng được; trên
 máy người dùng URL phải tải được CSV mà không đăng nhập Google. Chỉ cần đặt
 tệp URL cạnh `.exe` khi muốn ghi đè nguồn mặc định; việc thêm môn về sau chỉ
-cần cập nhật Sheet, không cần tạo lại `.exe`. Cơ chế này chỉ có trong bản `.exe`
+cần đăng ZIP đúng định dạng và cập nhật tab `GOOGLE_IDS`, không cần tạo lại
+`.exe`. Cơ chế này chỉ có trong bản `.exe`
 được build **sau thay đổi này**; artifact VER_01 đã phát hành trước đó vẫn cần
 được thay một lần.
 
@@ -159,6 +233,17 @@ ZIP không đăng nhập, SHA-256, số câu và khả năng đọc đáp án tr
 chỉnh Sheet, nội dung CSV công khai có thể mất vài phút mới cập nhật.
 
 ### Quản lý môn học
+
+Trên màn Thư viện, các môn đã cài được nhóm theo **năm → học kỳ**. Các gói cũ
+ITE303c thuộc SU26 (Summer 2026); AIL303m, CPV301, DAP391m và SSG105 thuộc
+FA26 (Fall 2026). Năm mới hiện trước năm cũ; trong mỗi năm, thứ tự là
+Fall → Summer → Spring. Từ 2027 trở đi, mỗi gói có thể khai báo tệp tùy chọn
+`academic_term.json` ngay trong thư mục môn, ví dụ
+`{"year": 2027, "semester": "SP"}`. Ba mã học kỳ hợp lệ là `SP` (Spring),
+`SU` (Summer), `FA` (Fall). Gói có khai báo này sẽ vào đúng nhóm khi được cài;
+môn chưa có học kỳ sẽ nằm trong “Chưa phân loại” và vẫn học được bình thường.
+Nếu cùng mã môn được học ở năm khác, metadata trong gói mới sẽ thay phân loại
+mặc định; app hiện chưa hỗ trợ cài đồng thời hai bản cùng mã môn.
 
 Trên Home, chọn **Cài đặt → Quản lý môn học** để xem các môn trong thư mục DATA, số câu,
 dung lượng, đường dẫn và trạng thái. Chọn một môn rồi chọn **Xóa môn đã chọn**;
@@ -205,7 +290,8 @@ người dùng có thể kiểm tra và quản lý dung lượng ở đó.
 - `Ctrl/Cmd` + `+` hoặc `=`: phóng to.
 - `Ctrl/Cmd` + `-`: thu nhỏ.
 - `Ctrl/Cmd` + `C`: sao chép ảnh đã crop.
-- `1`–`8` hoặc `A`–`H`: chọn đáp án tương ứng.
+- `1`–`9` hoặc `A`–`Z`: chọn đáp án tương ứng nếu câu có lựa chọn đó; từ lựa
+  chọn thứ 10 trở đi dùng phím chữ.
 - `Enter`: kiểm tra câu hoặc nộp bài tùy chế độ.
 - `←` / `→`: điều hướng câu hỏi.
 
@@ -263,6 +349,19 @@ pyinstaller --clean study_app_macos.spec
 Không thể build một binary duy nhất chạy trên cả ba hệ điều hành. Workflow CI
 build riêng artifact Windows x64, macOS Apple Silicon và Linux x86_64. Trên
 macOS, spec đồng thời tạo `SRC Learning.app`.
+
+Icon tĩnh của ứng dụng có nền kính trong suốt và được tạo lại bằng
+`python tools/build_app_icon.py`. Lệnh này xuất PNG 32–1024 px, ICO cho Windows
+và ICNS cho macOS (ICNS cần chạy trên macOS). Khi chạy `python main.py` hoặc
+bản đóng gói, cửa sổ chào hiển thị hoạt ảnh SRC trong 2,5 giây. Icon ở Dock,
+Taskbar và trình khởi chạy vẫn là ảnh tĩnh theo cơ chế của hệ điều hành.
+
+Trên Linux, Qt đặt icon cho cửa sổ đang chạy. Để icon xuất hiện trong trình
+khởi chạy sau khi cài bản PyInstaller, cài thêm
+`packaging/linux/src-learning.desktop` vào `~/.local/share/applications/` và
+`app/resources/brand/src-learning-256.png` vào
+`~/.local/share/icons/hicolor/256x256/apps/src-learning.png`; file thực thi
+`LuyenThiHinhAnh` cần nằm trong `PATH`.
 
 Ứng dụng Core đóng gói không bao gồm OpenCV, Tesseract hoặc bộ `DATA`. Người
 dùng cài từng môn bằng nút `+` trên Header. OCR được nạp theo nhu cầu trong môi

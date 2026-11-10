@@ -5,19 +5,20 @@ import sys
 from pathlib import Path
 
 APP_NAME = "SRC LEARNING"
+_FROZEN = getattr(sys, "frozen", False)
 APP_DIR = (
     Path(sys.executable).resolve().parent
-    if getattr(sys, "frozen", False)
+    if _FROZEN
     else Path(__file__).resolve().parent.parent
 )
-STATE_DIR = (
-    Path.home() / ".luyen_thi_hinh_anh"
-    if getattr(sys, "frozen", False)
-    else APP_DIR
-)
-DEFAULT_DATA_DIR = (
-    STATE_DIR / "DATA" if getattr(sys, "frozen", False) else APP_DIR / "DATA"
-)
+# Allow release checks to launch the actual EXE with a separate DB, catalog
+# cache and DATA directory without changing the user's normal profile.
+_STATE_DIR_OVERRIDE = os.environ.get("SRC_LEARNING_STATE_DIR", "").strip()
+if _STATE_DIR_OVERRIDE:
+    STATE_DIR = Path(_STATE_DIR_OVERRIDE).expanduser().resolve()
+else:
+    STATE_DIR = Path.home() / ".luyen_thi_hinh_anh" if _FROZEN else APP_DIR
+DEFAULT_DATA_DIR = STATE_DIR / "DATA"
 DEFAULT_DB_PATH = STATE_DIR / "study_progress.sqlite3"
 
 # Published CSV of the GOOGLE_IDS tab only; never the private Sheet edit URL.

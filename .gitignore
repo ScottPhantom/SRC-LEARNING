@@ -7,6 +7,7 @@ __pycache__/
 
 # Local content and user-generated data must never be published.
 DATA/
+.src-learning-test/
 .src-learning-recovery/
 user_data/
 uploads/
@@ -42,6 +43,13 @@ secrets*
 
 # Mock Exam reports generated from local database statistics.
 **/docs/*/Date-of-Statistical_*/
+/docs/Test_Ver/*/Date-of-Statistical_*/
+
+# Subject Statistics snapshots contain local study progress and answer keys.
+/docs/subject_statistics.json
+/docs/Test_Ver/subject_statistics.json
+/docs/.subject-statistics-*.tmp
+/docs/Test_Ver/.subject-statistics-*.tmp
 
 build/
 dist/

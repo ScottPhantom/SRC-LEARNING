@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtGui import QColor, QImage, QPainter
+from PyQt5.QtCore import QPoint
+from PyQt5.QtGui import QColor, QImage, QPainter, QPalette
 from PyQt5.QtWidgets import QApplication, QWidget
 
-from app.domain.models import AppSettings
+from app.domain.models import AppSettings, Question
+from app.ui.assessment_sidebar import AssessmentSidebar
 from app.ui.background import AppBackgroundCanvas, paint_app_background
 from app.ui.screens import BasePage, SettingsScreen
 from app.ui.subject_card import SubjectCard
@@ -33,6 +36,46 @@ def test_settings_save_button_keeps_a_visible_primary_role() -> None:
     assert rendered_button.pixelColor(10, 20) == QColor("#0A84FF")
     screen.close()
     screen.deleteLater()
+
+
+def test_answer_choices_match_sidebar_and_hint_tones_in_both_themes() -> None:
+    manager = ThemeManager(APP)
+    question = Question(
+        id="palette-check",
+        subject="TEST101",
+        category="Selections_1_choose",
+        relative_path="question.png",
+        absolute_path=Path("question.png"),
+    )
+    for theme, surface, neutral_hint, correct_hint, wrong_hint in (
+        ("light", "#ffffff", "#475569", "#16803a", "#c42b1c"),
+        ("dark", "#171a21", "#94a3b8", "#30d158", "#ff453a"),
+    ):
+        manager.apply(theme)
+        sidebar = AssessmentSidebar()
+        sidebar.resize(330, 500)
+        sidebar.answer_options.set_question(question)
+        sidebar.show()
+        APP.processEvents()
+
+        first = sidebar.answer_options.option_widgets[0]
+        sample = first.mapTo(sidebar, QPoint(20, 20))
+        assert sidebar.grab().toImage().pixelColor(sample) == QColor(surface)
+        assert first.shortcut_hint.palette().color(QPalette.WindowText) == QColor(neutral_hint)
+
+        first.click()
+        APP.processEvents()
+        assert sidebar.grab().toImage().pixelColor(sample) == QColor("#0a84ff")
+        assert first.shortcut_hint.palette().color(QPalette.WindowText) == QColor("#ffffff")
+
+        sidebar.answer_options.show_feedback(question, "A", "B")
+        APP.processEvents()
+        wrong, correct = sidebar.answer_options.option_widgets[:2]
+        assert wrong.shortcut_hint.palette().color(QPalette.WindowText) == QColor(wrong_hint)
+        assert correct.shortcut_hint.palette().color(QPalette.WindowText) == QColor(correct_hint)
+        sidebar.close()
+        sidebar.deleteLater()
+    manager.apply("light")
 
 
 def test_shared_background_renders_and_switches_theme_without_error() -> None:

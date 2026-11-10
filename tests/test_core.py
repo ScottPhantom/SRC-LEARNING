@@ -51,6 +51,20 @@ def test_scanner_handles_unicode_and_categories(tmp_path: Path) -> None:
     assert len({q.id for q in subjects[0].questions}) == 4
 
 
+def test_true_false_always_has_two_choices_even_with_extra_metadata() -> None:
+    question = Question(
+        id="true-false",
+        subject="TEST101",
+        category="True_False",
+        relative_path="True_False/question.png",
+        absolute_path=Path("question.png"),
+        option_letters=tuple("ABCDE"),
+    )
+    assert question.options == ("A", "B")
+    assert AnswerKeyRepository.validate(question, "A")
+    assert not AnswerKeyRepository.validate(question, "C")
+
+
 def test_scanner_reads_fifth_option_from_optional_metadata(tmp_path: Path) -> None:
     subject = make_questions(tmp_path / "DATA", 2)
     image_names = [q.relative_path for q in subject.questions]
@@ -63,6 +77,37 @@ def test_scanner_reads_fifth_option_from_optional_metadata(tmp_path: Path) -> No
     assert scanned.questions[1].options == tuple("ABCD")
     assert AnswerKeyRepository.validate(scanned.questions[0], "E")
     assert not AnswerKeyRepository.validate(scanned.questions[1], "E")
+
+
+def test_scanner_accepts_tenth_option_and_rejects_unlisted_answer(tmp_path: Path) -> None:
+    subject = make_questions(tmp_path / "DATA", 1)
+    with (subject.path / "question_metadata.csv").open(
+        "w", encoding="utf-8-sig", newline=""
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "option_letters"])
+        writer.writerow([subject.questions[0].relative_path, "ABCDEFGHIJ"])
+    scanned = DataScannerService(tmp_path / "DATA").scan()[0]
+    question = scanned.questions[0]
+    assert question.options == tuple("ABCDEFGHIJ")
+    assert AnswerKeyRepository.validate(question, "J")
+    assert not AnswerKeyRepository.validate(question, "K")
+
+
+def test_multiple_choice_can_grade_e_and_later_options(tmp_path: Path) -> None:
+    subject = make_questions(tmp_path / "DATA", 1, "Selections_Multiple_choose")
+    with (subject.path / "question_metadata.csv").open(
+        "w", encoding="utf-8-sig", newline=""
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_name", "option_letters"])
+        writer.writerow([subject.questions[0].relative_path, "ABCDEFGHIJ"])
+    question = DataScannerService(tmp_path / "DATA").scan()[0].questions[0]
+    question.correct_answer = "EJ"
+    assert AnswerKeyRepository.validate(question, "JE")
+    assert CrammingService.is_answer_correct(question, "JE")
+    assert ExamQuestion(question, selected_answer="EJ").calculate_score(10) == 10
+    assert not CrammingService.is_answer_correct(question, "E")
 
 
 def test_answer_key_load_validate_and_report(tmp_path: Path) -> None:
@@ -121,7 +166,8 @@ def test_answer_key_missing_file_logs_expected_absolute_path(
 
 def test_normalize_answer() -> None:
     assert normalize_answer(" d, b b a ") == "ABD"
-    assert normalize_answer("xyz") == ""
+    assert normalize_answer("j, e j") == "EJ"
+    assert normalize_answer("123") == ""
 
 
 def test_flashcard_persists_position_and_progress(tmp_path: Path) -> None:
