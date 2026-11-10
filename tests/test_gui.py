@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import os
+from collections.abc import Callable
 from pathlib import Path
+from time import monotonic
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -57,6 +59,15 @@ from app.ui.subject_management_panel import SubjectManagementPanel
 from app.ui.themes import DARK_STYLE, LIGHT_STYLE, ThemeManager
 
 QT_APP = QApplication.instance() or QApplication([])
+
+
+def _wait_for_gui_state(predicate: Callable[[], bool], timeout_ms: int = 2000) -> bool:
+    deadline = monotonic() + timeout_ms / 1000
+    while not predicate():
+        if monotonic() >= deadline:
+            return False
+        QTest.qWait(10)
+    return True
 
 
 def make_subject(root: Path, amount: int = 2):
@@ -503,17 +514,29 @@ def test_subject_view_cards_dashboard_and_quick_review(tmp_path: Path) -> None:
     card = screen.mode_cards["flash"]
     other_cards = [screen.mode_cards[mode] for mode in ("cram", "exam")]
     QApplication.sendEvent(card, QEvent(QEvent.Enter))
-    QTest.qWait(280)
     assert card.property("hovered") is True
-    assert card.minimumWidth() == card.minimumHeight() == 317
-    assert card.shadow.blurRadius() >= 54
+    assert _wait_for_gui_state(
+        lambda: (
+            card.minimumWidth() == card.minimumHeight() == 317
+            and card.shadow.blurRadius() >= 54
+            and all(
+                other.focus_overlay.isVisible()
+                and other.focus_overlay_effect.opacity() >= 0.49
+                for other in other_cards
+            )
+        )
+    ), "Hover did not enlarge the active card and dim the other cards"
     assert screen.statistics_tabs.geometry().top() == dashboard_top
-    assert all(other.focus_overlay.isVisible() for other in other_cards)
-    assert all(other.focus_overlay_effect.opacity() >= 0.49 for other in other_cards)
+
     QApplication.sendEvent(card, QEvent(QEvent.Leave))
-    QTest.qWait(280)
-    assert card.minimumWidth() == card.minimumHeight() == 264
-    assert all(not other.focus_overlay.isVisible() for other in other_cards)
+    assert card.property("hovered") is False
+    # The size can already be back at 264 before the fade finishes and hides the overlay.
+    assert _wait_for_gui_state(
+        lambda: (
+            card.minimumWidth() == card.minimumHeight() == 264
+            and all(other.focus_overlay.isHidden() for other in other_cards)
+        )
+    ), "Leaving the card did not restore its size and hide the other cards' overlays"
 
     table.cellDoubleClicked.emit(0, 0)
     QT_APP.processEvents()
