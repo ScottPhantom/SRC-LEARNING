@@ -2284,6 +2284,50 @@ def test_import_checks_new_code_from_remote_catalog(tmp_path: Path, monkeypatch)
     database.close()
 
 
+def test_drive_replacement_releases_target_watches_before_install(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services.data_package_installer import DataPackageCatalog, DataPackageSpec
+
+    old = make_subject(tmp_path, 1)
+    data = old.path.parent
+    database = Database(tmp_path / "replace-watchers.sqlite3")
+    database.set_setting("data_dir", str(data))
+    window = MainWindow(database)
+    assert window.thread_pool.waitForDone(2000)
+    QT_APP.processEvents()
+    assert old.path in map(Path, window.watcher.directories())
+    code = "replacement-drive-id"
+    window._data_package_installer.catalog = DataPackageCatalog(
+        [DataPackageSpec(old.name, code, "a" * 64, 100)]
+    )
+    monkeypatch.setattr(QMessageBox, "exec_", lambda _self: 0)
+    monkeypatch.setattr(
+        QMessageBox,
+        "clickedButton",
+        lambda box: next(
+            button for button in box.buttons() if button.text() == "Xác minh và thay thế"
+        ),
+    )
+    dispatched = []
+
+    def capture_dispatch(task) -> None:
+        watched = window.watcher.directories() + window.watcher.files()
+        assert not any(Path(path).is_relative_to(old.path) for path in watched)
+        assert data in map(Path, watched)
+        dispatched.append(task)
+
+    monkeypatch.setattr(window.thread_pool, "start", capture_dispatch)
+    window.show_data_import()
+    window._proceed_data_install(code)
+    assert dispatched == [window._data_install_task]
+    window._data_install_task = None
+    window._data_import_dialog.set_running(False)
+    window._data_import_dialog.reject()
+    window.close()
+    database.close()
+
+
 def test_delete_restores_files_when_database_sync_fails(tmp_path: Path, monkeypatch) -> None:
     from PyQt5.QtWidgets import QInputDialog
 
@@ -2411,12 +2455,21 @@ def test_drive_replacement_restores_old_subject_when_answer_version_fails(
         ],
     )
 
+    restore = SubjectManager.restore
+
+    def restore_without_watched_handles(manager, name, backup_path):
+        watched = window.watcher.directories() + window.watcher.files()
+        assert not any(Path(path).is_relative_to(new.path) for path in watched)
+        return restore(manager, name, backup_path)
+
+    monkeypatch.setattr(SubjectManager, "restore", restore_without_watched_handles)
     window._apply_subjects([new])
 
     assert (old.path / "old.txt").read_text(encoding="utf-8") == "original"
     assert not (old.path / "new.txt").exists()
     assert window._pending_data_install_result is None
     assert database.latest_bank_version(old.name) == 1
+    assert old.path in map(Path, window.watcher.directories())
     assert "đã khôi phục" in window._data_import_dialog.status_label.text()
     window._data_import_dialog.reject()
     window.close()

@@ -373,12 +373,7 @@ class MainWindow(QMainWindow):
             panel.status_label.setText(f"Không hủy được phiên học: {exc}")
             return
         panel.status_label.setText(f"Đang chuyển {name} vào vùng khôi phục…")
-        watched = [
-            path for path in self.watcher.directories() + self.watcher.files()
-            if Path(path) == self.data_dir / name or self.data_dir / name in Path(path).parents
-        ]
-        if watched:
-            self.watcher.removePaths(watched)
+        self._release_subject_watch_paths(self.data_dir / name)
         try:
             backup = SubjectManager(self.data_dir).remove(name)
         except SubjectManagementError as exc:
@@ -506,6 +501,8 @@ class MainWindow(QMainWindow):
         task.signals.failed.connect(self._data_install_failed)
         self._data_install_task = task
         self._rescan_requested = True
+        if replace_existing:
+            self._release_subject_watch_paths(destination)
         self.thread_pool.start(task)
 
     def _data_install_completed(self, result: DataInstallResult) -> None:
@@ -526,6 +523,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         self._pending_data_install_result = None
         manager = SubjectManager(self.data_dir)
+        self._release_subject_watch_paths(result.destination)
         try:
             if result.backup_path is None:
                 manager.remove(result.subject)
@@ -696,6 +694,16 @@ class MainWindow(QMainWindow):
         if errors:
             LOGGER.warning("Question bank update chưa hoàn tất: %s", " | ".join(errors))
             self.home.notice.setText("Lỗi cập nhật đáp án: " + " | ".join(errors))
+
+    def _release_subject_watch_paths(self, subject_dir: Path) -> None:
+        # QFileSystemWatcher holds Windows directory handles. Release the
+        # target subtree before either the install or rollback renames it.
+        watched = [
+            path for path in self.watcher.directories() + self.watcher.files()
+            if Path(path).is_relative_to(subject_dir)
+        ]
+        if watched:
+            self.watcher.removePaths(watched)
 
     def _reset_watch_paths(self, subjects: list[Subject]) -> None:
         old_paths = self.watcher.directories() + self.watcher.files()
