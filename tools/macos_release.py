@@ -84,9 +84,12 @@ def validate_archive(archive: Path) -> None:
     found_bundle = False
     with zipfile.ZipFile(archive) as bundle:
         for entry in bundle.infolist():
-            path = PurePosixPath(entry.filename)
-            if path.is_absolute() or ".." in path.parts or "\\" in entry.filename:
-                raise ValueError(f"Unsafe archive path: {entry.filename}")
+            # ZipInfo normalizes backslashes on Windows and truncates NULs.
+            # Validate the original name before either normalization can hide it.
+            original = entry.orig_filename
+            path = PurePosixPath(original)
+            if path.is_absolute() or ".." in path.parts or "\\" in original or "\x00" in original:
+                raise ValueError(f"Unsafe archive path: {original!r}")
             if not path.parts or path.parts[0] not in {APP_NAME, "__MACOSX"}:
                 raise ValueError(f"ZIP must retain the {APP_NAME} wrapper")
             if path.parts[0] == APP_NAME:

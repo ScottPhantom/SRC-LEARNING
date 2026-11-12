@@ -33,7 +33,7 @@ def make_app(root: Path) -> Path:
     (framework / "Versions" / "5" / "QtCore").write_bytes(b"framework")
     try:
         (framework / "Versions" / "Current").symlink_to("5", target_is_directory=True)
-        (framework / "QtCore").symlink_to("Versions/Current/QtCore")
+        (framework / "QtCore").symlink_to(Path("Versions") / "Current" / "QtCore")
     except OSError:
         pytest.skip("Creating symlinks requires privileges on this Windows runner")
     return app
@@ -79,11 +79,15 @@ def test_bundle_rejects_links_outside_bundle(tmp_path: Path) -> None:
         validate_bundle(app)
 
 
-@pytest.mark.parametrize("entry", ["Contents/Info.plist", "../SRC Learning.app/evil", "/SRC Learning.app/evil", "SRC Learning.app/../evil", "SRC Learning.app\\evil"])
+@pytest.mark.parametrize("entry", ["Contents/Info.plist", "../SRC Learning.app/evil", "/SRC Learning.app/evil", "SRC Learning.app/../evil", "SRC Learning.app\\evil", "SRC Learning.app/evil\x00hidden"])
 def test_archive_rejects_lost_wrapper_and_unsafe_paths(tmp_path: Path, entry: str) -> None:
     archive = tmp_path / "release.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
-        bundle.writestr(entry, b"data")
+        # Preserve intentionally malformed names, even on Windows where the
+        # ZipInfo constructor would otherwise normalize backslashes first.
+        member = zipfile.ZipInfo()
+        member.filename = entry
+        bundle.writestr(member, b"data")
     with pytest.raises(ValueError):
         validate_archive(archive)
 
