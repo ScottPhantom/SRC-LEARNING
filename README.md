@@ -350,6 +350,38 @@ Không thể build một binary duy nhất chạy trên cả ba hệ điều hà
 build riêng artifact Windows x64, macOS Apple Silicon và Linux x86_64. Trên
 macOS, spec đồng thời tạo `SRC Learning.app`.
 
+### ZIP macOS giữ nguyên ứng dụng
+
+Không upload trực tiếp thư mục `.app`: framework Qt/Python chứa symlink và cần
+giữ nguyên cấu trúc, quyền thực thi. Đóng gói bằng `ditto`, sau đó kiểm tra chính
+bản đã giải nén:
+
+```bash
+python tools/macos_release.py package --app "dist/SRC Learning.app" --archive dist/SRC-Learning-macOS-Apple-Silicon.zip
+python tools/macos_release.py verify --archive dist/SRC-Learning-macOS-Apple-Silicon.zip --source-app "dist/SRC Learning.app" --launch --report dist/macos-release-verification.json
+```
+
+Workflow macOS thực hiện cả hai bước trước khi upload ZIP nguyên bản (không nén
+lại). Kiểm tra gồm nội dung/quyền/symlink sau giải nén, `codesign --deep --strict`,
+và mở bằng LaunchServices/Cocoa: cửa sổ chính phải hiện thực sự và ổn định ít
+nhất 5 giây, không chỉ splash hoặc process chạy nền. QA dùng database/log tạm
+riêng; không tác động dữ liệu học hiện có. Kết quả và SHA-256 được upload trong
+artifact `SRC-Learning-macOS-verification`. Đây là smoke test khởi động, không
+thay thế kiểm thử toàn bộ hành trình học/tải môn.
+
+Người dùng Mac chip Apple Silicon: tải `SRC-Learning-macOS-Apple-Silicon.zip`,
+giải nén **một lần** bằng Archive Utility của macOS, rồi kéo nguyên
+`SRC Learning.app` vào Applications và mở app. Không mở file thực thi bên trong
+`Contents`, không dùng bản artifact cũ chỉ có thư mục `Contents`. Bản arm64 này
+không dành cho Mac Intel và không cần cài Python riêng.
+
+Bundle hiện có chữ ký ad-hoc để kiểm tra tính toàn vẹn, **chưa có Developer ID
+và notarization của Apple**. Vì vậy Gatekeeper có thể yêu cầu xác nhận nhà phát
+triển khi tải từ Internet. Chỉ cho phép mở riêng app đã xác minh đúng nguồn và
+SHA-256 trong System Settings → Privacy & Security; không tắt Gatekeeper toàn
+hệ thống. Thông báo “damaged” vẫn cần kiểm tra lại ZIP/chữ ký, không tự động bỏ
+quarantine để che lỗi đóng gói.
+
 Icon tĩnh của ứng dụng có nền kính trong suốt và được tạo lại bằng
 `python tools/build_app_icon.py`. Lệnh này xuất PNG 32–1024 px, ICO cho Windows
 và ICNS cho macOS (ICNS cần chạy trên macOS). Khi chạy `python main.py` hoặc

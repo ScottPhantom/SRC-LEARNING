@@ -19,8 +19,8 @@ jobs:
             artifact_path: dist/LuyenThiHinhAnh.exe
             spec_file: study_app.spec
           - os: macos-15
-            artifact_name: SRC-Learning-macOS-Apple-Silicon
-            artifact_path: dist/SRC Learning.app
+            artifact_name: SRC-Learning-macOS-Apple-Silicon.zip
+            artifact_path: dist/SRC-Learning-macOS-Apple-Silicon.zip
             spec_file: study_app_macos.spec
           - os: ubuntu-22.04
             artifact_name: SRC-Learning-Linux-x64
@@ -70,9 +70,46 @@ jobs:
           }
           Stop-Process -Id $app.Id
 
+      - name: Archive intact macOS application bundle
+        if: runner.os == 'macOS'
+        run: >-
+          python tools/macos_release.py package
+          --app "dist/SRC Learning.app"
+          --archive "${{ matrix.artifact_path }}"
+
+      - name: Verify extracted macOS bundle and launch real GUI
+        if: runner.os == 'macOS'
+        run: >-
+          python tools/macos_release.py verify
+          --archive "${{ matrix.artifact_path }}"
+          --source-app "dist/SRC Learning.app"
+          --launch
+          --report dist/macos-release-verification.json
+
       - name: Upload platform artifact
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+      # Upload the already-built ZIP verbatim. Uploading .app directories loses
+      # framework symlinks; wrapping this ZIP again also confuses installation.
+      - name: Upload macOS ZIP without re-archiving
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ matrix.artifact_path }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload macOS verification evidence
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: SRC-Learning-macOS-verification
+          path: |
+            dist/macos-release-verification.json
+            dist/SRC-Learning-macOS-Apple-Silicon.zip.sha256
           if-no-files-found: error
