@@ -66,7 +66,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          QT_QPA_PLATFORM: offscreen
+          # QMessageBox.exec_ can access-violate in Qt's Windows offscreen
+          # plugin. These are real modal GUI flows on the interactive runner.
+          QT_QPA_PLATFORM: windows
         run: python -X faulthandler -u tools/release_gui_qa.py qt --workdir "$env:RUNNER_TEMP/src-learning-release-qa"
 
       - name: Install QA-only Windows desktop automation
