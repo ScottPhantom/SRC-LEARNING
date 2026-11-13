@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shutil
 import stat
 import tempfile
 import threading
@@ -23,7 +24,7 @@ from app.config import CATEGORIES, IMAGE_EXTENSIONS
 from app.domain.models import Question, parse_option_letters
 from app.repositories.answer_key import AnswerKeyRepository
 from app.services.data_scanner import DataScannerService
-from app.services.question_bank_updates import stage_replacement_answer_history
+from app.services.question_bank_updates import VERSION_DIRECTORY, stage_replacement_answer_history
 from app.services.subject_management import SubjectManagementError, SubjectManager
 
 ProgressCallback = Callable[[str, int, str], None]
@@ -242,6 +243,17 @@ class DataPackageInstaller:
                     raise DataPackageError(
                         f"Không chuyển được lịch sử answer version sang gói mới: {exc}"
                     ) from exc
+            else:
+                # The publisher's history is not this device's history. A fresh
+                # install bootstraps locally; a reinstall can use its SQLite
+                # baseline. Replacement above always preserves the local files.
+                incoming_versions = source / VERSION_DIRECTORY
+                if incoming_versions.is_symlink() or (
+                    incoming_versions.exists() and not incoming_versions.is_dir()
+                ):
+                    raise DataPackageError("Gói mới chứa answer_versions không an toàn.")
+                if incoming_versions.exists():
+                    shutil.rmtree(incoming_versions)
             report("install", 0, "Đang chuyển dữ liệu đã xác minh vào DATA…")
             backup_path = self._atomic_install(source, destination, replace_existing)
             report("complete", 100, f"Đã cài đặt {package.subject} thành công.")

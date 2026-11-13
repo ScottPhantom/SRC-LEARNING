@@ -4,32 +4,32 @@
     {
       "subject": "AIL303m",
       "file_id": "1r82uwHDR7LVfpVv74W75OZ6xWh-2odrP",
-      "sha256": "d10a53512bd0c7fee8b509957db2208e5eb63715c1c0b549557f14b8cb72174d",
-      "archive_size": 19013409,
+      "sha256": "ddf02cc022f76a411acb98c3f0f27ab3e9fcf1095f7bcb571389f6e1ff193a3b",
+      "archive_size": 18692607,
       "expected_questions": 195,
       "enabled": true
     },
     {
       "subject": "CPV301",
       "file_id": "1KBpqVnqdmv7TymK4wNXjdUu283seNlAE",
-      "sha256": "208f756c3c06295887439e28ef1d15ca7dba005ba6164357a6cb34ae3ae70648",
-      "archive_size": 24772327,
+      "sha256": "d37d46c2c6608d5800e6d466d65cd669638e382ff21331a39084bdeb3ec6b291",
+      "archive_size": 24925667,
       "expected_questions": 284,
       "enabled": true
     },
     {
       "subject": "DAP391m",
       "file_id": "1uw-ts9-mYyjgkvoqlZmhIynQzbUwriJz",
-      "sha256": "73081010b0b603a456d36d51794a72fd8c3eecf6e23f3f96390448f5c35e674c",
-      "archive_size": 16914523,
+      "sha256": "80d69ad25f602f1e2c2d4c9ef35be82c5ae0e8df28bf009888a4e49b2b348b9a",
+      "archive_size": 16991561,
       "expected_questions": 265,
       "enabled": true
     },
     {
       "subject": "SSG105",
       "file_id": "1947vRizLAeLY_egXG3ycpoPLNj-j0oLa",
-      "sha256": "bcfd796e1440b25294ad8859ac661748782a08f215eb43d35dbab5425ef86113",
-      "archive_size": 37181046,
+      "sha256": "c674fd60036704456b55e8c4bcad5833deeed6d97098867b90ccde00643445d5",
+      "archive_size": 37225755,
       "expected_questions": 456,
       "enabled": true
     }

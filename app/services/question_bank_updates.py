@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from app.config import MULTIPLE_CATEGORY
+from app.config import CATEGORIES, MULTIPLE_CATEGORY
 from app.domain.models import Question, Subject, normalize_answer
 from app.repositories.answer_key import AnswerKeyRepository, normalize_relative_path
 from app.repositories.database import Database
@@ -247,11 +247,70 @@ class QuestionBankUpdateChecker:
     @staticmethod
     def _load_manifest(path: Path) -> tuple[int, list[BankEntry]]:
         value = json.loads(path.read_text(encoding="utf-8"))
-        if int(value.get("schema_version", 0)) != MANIFEST_SCHEMA_VERSION:
-            raise ValueError(f"Manifest không được hỗ trợ: {path}")
-        return int(value["bank_version"]), [
-            BankEntry.from_dict(item) for item in value.get("questions", [])
-        ]
+        if not isinstance(value, dict):
+            raise ValueError(f"Manifest phải là một JSON object: {path}")
+        try:
+            if int(value.get("schema_version", 0)) != MANIFEST_SCHEMA_VERSION:
+                raise ValueError(f"Manifest không được hỗ trợ: {path}")
+            version = int(value["bank_version"])
+            rows = value["questions"]
+            if version < 1 or not isinstance(rows, list):
+                raise ValueError("Version hoặc danh sách revision không hợp lệ")
+            return version, [BankEntry.from_dict(item) for item in rows]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"Manifest thiếu trường hoặc sai định dạng: {path}") from exc
+
+    def restore_missing_baseline(self, subject: Subject) -> bool:
+        """Reconcile a legacy imported manifest without modifying study state."""
+        active = subject.path / VERSION_DIRECTORY / ACTIVE_MANIFEST
+        if subject.path.is_symlink() or active.parent.is_symlink() or active.is_symlink():
+            raise ValueError("Không phục hồi từ đường dẫn answer version là symlink.")
+        if not active.exists():
+            return False
+        version, entries = self._load_manifest(active)
+        payload = json.loads(active.read_text(encoding="utf-8"))
+        if version < 1 or payload.get("subject") != subject.name:
+            raise ValueError("Manifest answer version không khớp môn đang học.")
+        recorded = self.database.recorded_bank_version(subject.name)
+        if recorded is not None:
+            if recorded != version:
+                raise ValueError(
+                    f"SQLite v{recorded} khác manifest v{version}; không tự ghi đè lịch sử học."
+                )
+            return False
+        snapshot_manifest = active.parent / f"manifest.v{version}.json"
+        snapshot_answers = active.parent / f"answers.v{version}.csv"
+        if any(
+            path.is_symlink() or not path.is_file()
+            for path in (active, snapshot_manifest, snapshot_answers)
+        ):
+            raise ValueError("Thiếu snapshot answer version an toàn để phục hồi SQLite.")
+        if snapshot_manifest.read_bytes() != active.read_bytes():
+            raise ValueError("Snapshot manifest không nhất quán; không phục hồi SQLite.")
+        paths: set[str] = set()
+        logical_ids: set[str] = set()
+        expected_answers: dict[str, str] = {}
+        for entry in entries:
+            path = PurePosixPath(entry.relative_path)
+            if (
+                not entry.active or path.is_absolute() or ".." in path.parts
+                or len(path.parts) != 2 or path.parts[0] not in CATEGORIES
+                or entry.category != path.parts[0]
+                or entry.question_id != stable_question_id(subject.name, entry.relative_path)
+                or entry.revision < 1 or not 1 <= entry.bank_version <= version
+                or entry.relative_path in paths or entry.logical_id in logical_ids
+            ):
+                raise ValueError("Snapshot chứa revision hoặc danh tính câu hỏi không hợp lệ.")
+            paths.add(entry.relative_path)
+            logical_ids.add(entry.logical_id)
+            expected_answers[entry.relative_path] = entry.answer
+        if self._read_answers(snapshot_answers) != expected_answers:
+            raise ValueError("Snapshot đáp án không khớp manifest; không phục hồi SQLite.")
+        return self.database.restore_missing_question_bank_baseline(
+            subject=subject.name,
+            bank_version=version,
+            revisions=[asdict(entry) for entry in entries],
+        )
 
     @staticmethod
     def _manifest_text(
@@ -442,9 +501,18 @@ class QuestionBankUpdateChecker:
                 previous_version, old_entries = self._load_manifest(
                     active_manifest_path
                 )
+                if apply:
+                    self.restore_missing_baseline(subject)
             else:
-                previous_version = 1
-                old_entries = self._bootstrap_entries(subject, raw_answers)
+                baseline = self.database.question_bank_baseline(subject.name)
+                if baseline is None:
+                    previous_version = 1
+                    old_entries = self._bootstrap_entries(subject, raw_answers)
+                else:
+                    previous_version, stored_entries = baseline
+                    old_entries = [BankEntry.from_dict(entry) for entry in stored_entries]
+                    if not old_entries and subject.questions:
+                        raise ValueError("SQLite có version nhưng thiếu revision; không khởi tạo lại lịch sử.")
                 result.initialized = True
         except (
             OSError,
@@ -544,15 +612,16 @@ class QuestionBankUpdateChecker:
                     versions_dir / f"manifest.v{previous_version}.json", manifest
                 )
                 self._atomic_write(active_manifest_path, manifest)
-                self.database.apply_question_bank_update(
-                    subject=subject.name,
-                    bank_version=previous_version,
-                    revisions=[asdict(entry) for entry in old_entries],
-                    updates=[],
-                    question_count=len(subject.questions),
-                    added_count=0,
-                    deleted_count=0,
-                )
+                if self.database.recorded_bank_version(subject.name) is None:
+                    self.database.apply_question_bank_update(
+                        subject=subject.name,
+                        bank_version=previous_version,
+                        revisions=[asdict(entry) for entry in old_entries],
+                        updates=[],
+                        question_count=len(subject.questions),
+                        added_count=0,
+                        deleted_count=0,
+                    )
             return result
 
         next_version = previous_version + 1
@@ -576,7 +645,9 @@ class QuestionBankUpdateChecker:
                 and change.old.file_sha256 == hashes[relative]
                 and AnswerKeyRepository.validate(question, change.old.answer)
             )
-            if preserve_move:
+            # An explicit, valid approved correction wins even when the image
+            # did not change. Preserve a moved answer only as a fallback.
+            if preserve_move and not candidate:
                 candidate = change.old.answer
             if not candidate or not AnswerKeyRepository.validate(question, candidate):
                 try:
@@ -680,15 +751,16 @@ class QuestionBankUpdateChecker:
             self._atomic_write(
                 versions_dir / f"manifest.v{previous_version}.json", initial_manifest
             )
-            self.database.apply_question_bank_update(
-                subject=subject.name,
-                bank_version=previous_version,
-                revisions=[asdict(entry) for entry in old_entries],
-                updates=[],
-                question_count=len(old_entries),
-                added_count=0,
-                deleted_count=0,
-            )
+            if self.database.recorded_bank_version(subject.name) is None:
+                self.database.apply_question_bank_update(
+                    subject=subject.name,
+                    bank_version=previous_version,
+                    revisions=[asdict(entry) for entry in old_entries],
+                    updates=[],
+                    question_count=len(old_entries),
+                    added_count=0,
+                    deleted_count=0,
+                )
 
         def finalize_files() -> None:
             files = {

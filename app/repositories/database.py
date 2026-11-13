@@ -384,13 +384,81 @@ class Database:
                 (key, str(value)),
             )
 
-    def latest_bank_version(self, subject: str) -> int:
+    def recorded_bank_version(self, subject: str) -> int | None:
+        """Read actual metadata, distinguishing an absent row from a real v1."""
         row = self._connection.execute(
             """SELECT bank_version FROM question_bank_versions
             WHERE subject=? AND active=1 ORDER BY bank_version DESC LIMIT 1""",
             (subject,),
         ).fetchone()
-        return int(row["bank_version"]) if row else 1
+        return int(row["bank_version"]) if row else None
+
+    def latest_bank_version(self, subject: str) -> int:
+        return self.recorded_bank_version(subject) or 1
+
+    def question_bank_baseline(
+        self, subject: str
+    ) -> tuple[int, list[dict[str, Any]]] | None:
+        """Read the local baseline when a removed/reinstalled course has no files."""
+        with self._lock:
+            version = self.recorded_bank_version(subject)
+            if version is None:
+                return None
+            rows = self._connection.execute(
+                """SELECT logical_id,revision,question_id,bank_version,
+                relative_path,category,correct_answer AS answer,file_sha256,
+                active,supersedes_question_id FROM question_revisions
+                WHERE subject=? AND active=1 ORDER BY relative_path""",
+                (subject,),
+            ).fetchall()
+            return version, [dict(row) for row in rows]
+
+    def restore_missing_question_bank_baseline(
+        self, *, subject: str, bank_version: int, revisions: Sequence[dict[str, Any]]
+    ) -> bool:
+        """Repair legacy missing metadata only; never regrade or reset progress.
+
+        The caller must first validate the on-disk manifest and answer snapshot.
+        Existing, contradictory history is not silently replaced. Only the two
+        question-bank metadata tables are written, in a single transaction.
+        """
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT bank_version,active FROM question_bank_versions WHERE subject=?",
+                (subject,),
+            ).fetchall()
+            if existing:
+                if any(row["active"] and row["bank_version"] == bank_version for row in existing):
+                    return False
+                raise ValueError(
+                    "Lịch sử phiên bản SQLite khác manifest; không tự ghi đè lịch sử học."
+                )
+            orphaned = connection.execute(
+                "SELECT 1 FROM question_revisions WHERE subject=? LIMIT 1", (subject,)
+            ).fetchone()
+            if orphaned is not None:
+                raise ValueError("SQLite có revision nhưng thiếu version; cần kiểm tra bản sao lưu.")
+            connection.execute(
+                """INSERT INTO question_bank_versions(
+                subject,bank_version,active,created_at,question_count,
+                added_count,updated_count,deleted_count) VALUES(?,?,1,?,?,0,0,0)""",
+                (subject, bank_version, utc_now(), sum(bool(row.get("active", True)) for row in revisions)),
+            )
+            connection.executemany(
+                """INSERT INTO question_revisions(
+                subject,logical_id,revision,question_id,bank_version,
+                relative_path,category,correct_answer,file_sha256,active,
+                supersedes_question_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                [
+                    (subject, row["logical_id"], row["revision"], row["question_id"],
+                     row["bank_version"], row["relative_path"], row["category"],
+                     row["answer"], row.get("file_sha256", ""),
+                     int(bool(row.get("active", True))), row.get("supersedes_question_id"))
+                    for row in revisions
+                ],
+            )
+        LOGGER.info("Đã phục hồi metadata answer bank %s v%d; giữ nguyên tiến độ/phiên học", subject, bank_version)
+        return True
 
     def pending_question_bank_notification(
         self, subject: str

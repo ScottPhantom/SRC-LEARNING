@@ -530,6 +530,29 @@ def test_drive_replacement_without_changes_keeps_current_answer_version(
     database.close()
 
 
+def test_first_install_does_not_import_the_publishers_answer_history(tmp_path: Path) -> None:
+    archive = make_subject_archive(tmp_path, subject="CPV301")
+    publisher_data = tmp_path / "source" / "DATA"
+    subject = DataScannerService(publisher_data).scan()[0]
+    publisher_db = Database(tmp_path / "publisher.sqlite3")
+    publisher_db.sync_questions(subject.questions, [subject.name])
+    QuestionBankUpdateChecker(publisher_db, (0, 0.9, 0.25, 0.1)).check_subject(subject)
+    publisher_db.close()
+    archive = make_subject_archive(tmp_path, subject="CPV301")
+    data = tmp_path / "client" / "DATA"
+    installer = installer_for(archive, "CPV301")
+    result = installer.install("approved-drive-file-id", data)
+    assert not (result.destination / "answer_versions").exists()
+    database = Database(tmp_path / "client" / "progress.sqlite3")
+    subject = DataScannerService(data).scan()[0]
+    database.sync_questions(subject.questions, [subject.name])
+    update = QuestionBankUpdateChecker(database, (0, 0.9, 0.25, 0.1)).check_subject(subject)
+    assert update.initialized and not update.errors
+    assert database.recorded_bank_version(subject.name) == 1
+    assert installer.install("approved-drive-file-id", data, replace_existing=True).previous_bank_version == 1
+    database.close()
+
+
 def test_drive_replacement_rejects_existing_answers_without_version_baseline(
     tmp_path: Path,
 ) -> None:

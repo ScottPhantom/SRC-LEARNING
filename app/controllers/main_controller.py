@@ -599,8 +599,13 @@ class MainWindow(QMainWindow):
         self.subjects = {subject.name: subject for subject in subjects}
         if pending_install is not None and pending_install.previous_bank_version is not None:
             try:
-                database_version = self.database.latest_bank_version(pending_install.subject)
-            except sqlite3.Error as exc:
+                installed_subject = self.subjects.get(pending_install.subject)
+                if installed_subject is not None:
+                    QuestionBankUpdateChecker(
+                        self.database, self.settings.crop_region
+                    ).restore_missing_baseline(installed_subject)
+                database_version = self.database.recorded_bank_version(pending_install.subject)
+            except (sqlite3.Error, OSError, ValueError, KeyError, TypeError) as exc:
                 self._rollback_data_install(pending_install, previous_subjects, str(exc))
                 return
             if database_version != pending_install.previous_bank_version:

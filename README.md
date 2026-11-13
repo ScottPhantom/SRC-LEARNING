@@ -199,6 +199,16 @@ App chỉ báo cài thành công sau khi cả dữ liệu lẫn answer version �
 nếu bước phiên bản lỗi, app khôi phục môn cũ. Môn cũ có `answers.csv` nhưng
 chưa có manifest version phải được làm mới/quét lại trước khi thay gói.
 
+Khi cài lần đầu, app bỏ lịch sử `answer_versions` của người đóng ZIP và tạo
+baseline riêng trên máy. Cài lại môn đã xóa dùng baseline SQLite còn giữ, không
+đưa version ngược về v1. Với các bản cũ đã nhập manifest nhưng chưa ghi version
+vào SQLite, app tự phục hồi **chỉ metadata bị thiếu**, sau khi đối chiếu subject,
+snapshot manifest, snapshot đáp án và danh tính câu hỏi. Việc phục hồi không
+xóa tiến độ, chấm lại bài thi hoặc hủy Flashcard/Cramming đang hoạt động. Nếu
+SQLite đã có lịch sử thật mâu thuẫn, hoặc snapshot hỏng/thiếu, app chặn thay vì
+tự ghi đè/reset lịch sử. Không sửa tay số version hoặc xóa database để vượt qua
+kiểm tra này.
+
 Danh mục trực tuyến do chủ dự án quản lý trong tab `GOOGLE_IDS` của Google Sheet
 `SRC_APP`. Chỉ những dòng có cột `App manifest` bằng chính xác `Đã bật` mới
 được app chấp nhận. Mỗi dòng được bật phải có Google file ID, SHA-256 ZIP,
@@ -349,6 +359,29 @@ pyinstaller --clean study_app_macos.spec
 Không thể build một binary duy nhất chạy trên cả ba hệ điều hành. Workflow CI
 build riêng artifact Windows x64, macOS Apple Silicon và Linux x86_64. Trên
 macOS, spec đồng thời tạo `SRC Learning.app`.
+
+### Windows ZIP có kiểm định GUI
+
+Artifact Windows là `SRC-Learning-Windows-x64.zip`, gồm `LuyenThiHinhAnh.exe`,
+hướng dẫn tiếng Việt và `release-info.json`; không chứa DATA hoặc database.
+CI tải gói CPV công khai, kiểm tra metadata GOOGLE_IDS khớp fallback DSS rồi
+thử giao diện nhập gói trên profile tạm: phục hồi manifest có sẵn/SQLite thiếu,
+thêm câu qua thay gói, cài mới và tải lại gói không đổi. Các bảng tiến độ, lịch
+sử thi, hai phiên AIL giả lập đang hoạt động và tệp AIL phải giữ nguyên.
+Khi thêm câu làm CPV tăng version, nhãn `graded_bank_version` của bài CPV có
+thể tiến theo version mới; đáp án đã chọn, điểm số và toàn bộ trạng thái AIL
+vẫn phải giữ nguyên. Trường hợp chỉ phục hồi metadata không đổi cả nhãn này.
+
+Sau build, CI dùng UI Automation điều khiển **chính EXE Windows** để nhập mã,
+xác nhận thay thế, tải thực tế từ Drive, chờ hoàn tất 100% và đóng app sạch.
+Ảnh GUI và báo cáo nằm trong artifact `SRC-Learning-Windows-GUI-verification`.
+`tools/windows_release.py` chỉ tạo ZIP nếu EXE x64 đúng SHA của bản vừa thử,
+catalog được nhúng trong EXE khớp metadata đã kiểm định và mọi gate đều đạt.
+Thư viện UI Automation chỉ được cài sau khi build để kiểm thử, không đi vào app.
+
+Khi cập nhật: thoát app cũ, giải nén ZIP mới vào thư mục riêng và chỉ thay EXE;
+giữ nguyên `%USERPROFILE%\.luyen_thi_hinh_anh`. Không cần tải lại AIL để cập nhật
+CPV. Không chạy đồng thời hai bản app trên cùng một profile.
 
 ### ZIP macOS giữ nguyên ứng dụng
 
