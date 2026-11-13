@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import faulthandler
 import hashlib
 import json
 import os
@@ -211,6 +212,7 @@ def check_preserved(state: dict, expected_version: int) -> None:
 
 
 def qt_qa(root: Path, metadata: dict) -> list[dict]:
+    print("Qt GUI QA: importing application modules", flush=True)
     from PyQt5.QtCore import QTimer, Qt
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication, QMessageBox
@@ -220,10 +222,14 @@ def qt_qa(root: Path, metadata: dict) -> list[dict]:
     from app.services.data_package_installer import DataPackageCatalog, DataPackageInstaller
     from app.services.package_catalog_source import PackageCatalogSource
 
+    print("Qt GUI QA: creating QApplication", flush=True)
     app = QApplication.instance() or QApplication([])
+    print("Qt GUI QA: QApplication ready", flush=True)
     reports = []
     for scenario in ("legacy", "add", "fresh"):
+        print(f"Qt GUI QA: preparing {scenario} profile", flush=True)
         state = make_profile(root, f"qt-{scenario}", scenario, metadata["cpv"])
+        print(f"Qt GUI QA: opening {scenario} window", flush=True)
         database = Database(state["database"])
         window = MainWindow(database)
         window.resize(1280, 800)
@@ -273,6 +279,7 @@ def qt_qa(root: Path, metadata: dict) -> list[dict]:
             assert version(state["database"]) == state["startup_version"]
             messages = []
             for iteration in (1, 2):
+                print(f"Qt GUI QA: {scenario} import {iteration}", flush=True)
                 QTest.mouseClick(window.app_header.data_import_button, Qt.LeftButton)
                 dialog = window._data_import_dialog
                 assert dialog is not None
@@ -288,6 +295,7 @@ def qt_qa(root: Path, metadata: dict) -> list[dict]:
                 assert dialog.progress_bar.value() == 100
                 assert f"answer bank v{state['installed_version']}" in dialog.status_label.text()
                 messages.append(dialog.status_label.text())
+                print(dialog.status_label.text(), flush=True)
                 dialog.grab().save(str(root / f"qt-{scenario}-{iteration}.png"))
                 check_preserved(state, state["installed_version"])
                 QTest.mouseClick(dialog.install_button, Qt.LeftButton)
@@ -389,6 +397,7 @@ def main() -> int:
     parser.add_argument("--exe", type=Path)
     args = parser.parse_args()
     root = marked_workspace(args.workdir)
+    print(f"Release GUI QA mode: {args.mode}", flush=True)
     os.environ["SRC_LEARNING_STATE_DIR"] = str(root / "unused-source-profile")
     if args.mode == "prepare":
         print(json.dumps(prepare(root, args.archive), ensure_ascii=False, indent=2))
@@ -397,7 +406,12 @@ def main() -> int:
     assert digest(root / "CPV301.zip") == metadata["cpv"]["sha256"]
     if args.mode == "qt":
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        reports = qt_qa(root, metadata)
+        with (root / "qt-crash-log.txt").open("w", encoding="utf-8") as crash_log:
+            faulthandler.enable(file=crash_log, all_threads=True)
+            try:
+                reports = qt_qa(root, metadata)
+            finally:
+                faulthandler.disable()
     else:
         if args.exe is None:
             parser.error("--exe is required for native Windows QA")

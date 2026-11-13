@@ -67,7 +67,7 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python tools/release_gui_qa.py qt --workdir "$env:RUNNER_TEMP/src-learning-release-qa"
+        run: python -X faulthandler -u tools/release_gui_qa.py qt --workdir "$env:RUNNER_TEMP/src-learning-release-qa"
 
       - name: Install QA-only Windows desktop automation
         if: runner.os == 'Windows'
@@ -130,6 +130,7 @@ jobs:
             ${{ runner.temp }}/src-learning-release-qa/metadata.json
             ${{ runner.temp }}/src-learning-release-qa/*.png
             ${{ runner.temp }}/src-learning-release-qa/*-controls.txt
+            ${{ runner.temp }}/src-learning-release-qa/*-crash-log.txt
             dist/windows-release-info.json
             dist/SRC-Learning-Windows-x64.zip.sha256
           if-no-files-found: warn
