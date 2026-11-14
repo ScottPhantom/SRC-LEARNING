@@ -390,6 +390,9 @@ def windows_qa(root: Path, metadata: dict, executable: Path) -> list[dict]:
 
 
 def main() -> int:
+    for output_stream in (sys.stdout, sys.stderr):
+        if output_stream is not None and hasattr(output_stream, "reconfigure"):
+            output_stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("prepare", "qt", "windows"))
     parser.add_argument("--workdir", type=Path, required=True)
