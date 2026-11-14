@@ -345,11 +345,13 @@ def windows_qa(root: Path, metadata: dict, executable: Path) -> list[dict]:
             assert version(state["database"]) == state["startup_version"]
             main.wait("visible enabled ready", timeout=30)
             main.child_window(title="Thêm môn học", control_type="Button").click_input()
-            dialog = desktop.window(title="Thêm môn học", process=gui_pid)
+            # Qt exposes owned modal dialogs as Window children of the main
+            # window in UIA, not as Desktop's top-level windows.
+            dialog = main.child_window(title="Thêm môn học", control_type="Window")
             dialog.wait("visible", timeout=15)
             dialog.child_window(control_type="Edit", found_index=0).set_edit_text(metadata["cpv"]["file_id"])
             dialog.child_window(title="Tải và cài đặt", control_type="Button").click_input()
-            confirmation = desktop.window(title="Thay thế dữ liệu môn học", process=gui_pid)
+            confirmation = main.child_window(title="Thay thế dữ liệu môn học", control_type="Window")
             confirmation.wait("visible", timeout=45)
             confirmation.child_window(title="Xác minh và thay thế", control_type="Button").click_input()
             deadline = time.monotonic() + 180
