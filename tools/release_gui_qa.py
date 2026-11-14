@@ -213,7 +213,7 @@ def check_preserved(state: dict, expected_version: int) -> None:
 
 def qt_qa(root: Path, metadata: dict) -> list[dict]:
     print("Qt GUI QA: importing application modules", flush=True)
-    from PyQt5.QtCore import QTimer, Qt
+    from PyQt5.QtCore import QPoint, QTimer, Qt
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication, QMessageBox
     from app.config import CATALOG_CSV_URL
@@ -294,6 +294,15 @@ def qt_qa(root: Path, metadata: dict) -> list[dict]:
                 assert dialog._completed, dialog.status_label.text()
                 assert dialog.progress_bar.value() == 100
                 assert f"answer bank v{state['installed_version']}" in dialog.status_label.text()
+                app.processEvents()
+                label = dialog.status_label
+                code_bottom = dialog.code_input.mapTo(dialog, QPoint(0, dialog.code_input.height())).y()
+                label_top = label.mapTo(dialog, QPoint(0, 0)).y()
+                label_bottom = label.mapTo(dialog, QPoint(0, label.height())).y()
+                progress_top = dialog.progress_bar.mapTo(dialog, QPoint(0, 0)).y()
+                assert label_top >= code_bottom + 8, "Import status overlaps code input"
+                assert label.height() >= label.heightForWidth(label.width()), "Import status text is clipped"
+                assert progress_top >= label_bottom + 8, "Import status overlaps progress bar"
                 messages.append(dialog.status_label.text())
                 print(dialog.status_label.text(), flush=True)
                 dialog.grab().save(str(root / f"qt-{scenario}-{iteration}.png"))

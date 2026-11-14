@@ -110,6 +110,7 @@ class DataImportDialog(QDialog):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(max(0, min(100, percent)))
         self.status_label.setText(message)
+        self._fit_status_layout()
 
     def show_error(self, message: str) -> None:
         self.set_running(False)
@@ -117,6 +118,7 @@ class DataImportDialog(QDialog):
         self.status_label.setText(message)
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
+        self._fit_status_layout()
 
     def show_complete(self, message: str) -> None:
         self._completed = True
@@ -135,6 +137,14 @@ class DataImportDialog(QDialog):
             pass
         self.install_button.clicked.connect(self.accept)
         self.cancel_button.hide()
+        self._fit_status_layout()
+
+    def _fit_status_layout(self) -> None:
+        # A wrapped QLabel can need more height than the dialog originally
+        # allocated. adjustSize() may also limit the width to the screen;
+        # recompute the wrapped height at that actual width, not sizeHint's.
+        self.adjustSize()
+        self.resize(self.width(), self.layout().totalHeightForWidth(self.width()))
 
     def reject(self) -> None:
         if self._running:
