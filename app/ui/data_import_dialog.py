@@ -144,7 +144,16 @@ class DataImportDialog(QDialog):
         # allocated. adjustSize() may also limit the width to the screen;
         # recompute the wrapped height at that actual width, not sizeHint's.
         self.adjustSize()
-        self.resize(self.width(), self.layout().totalHeightForWidth(self.width()))
+        label = self.status_label
+        label.setMinimumHeight(max(label.fontMetrics().height(), label.heightForWidth(label.width())))
+        card = label.parentWidget()
+        card.layout().invalidate()
+        card.setMinimumHeight(card.minimumSizeHint().height())
+        self.layout().invalidate()
+        self.resize(self.width(), max(
+            self.minimumSizeHint().height(),
+            self.layout().totalHeightForWidth(self.width()),
+        ))
 
     def reject(self) -> None:
         if self._running:
