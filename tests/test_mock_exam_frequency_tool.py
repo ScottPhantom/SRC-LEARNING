@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
 from PIL import Image
 
+from app.config import DEFAULT_DB_PATH
 from tools.analyze_mock_exam_frequency import (
     DEFAULT_DATABASE_PATH,
     PROJECT_ROOT,
@@ -13,19 +15,16 @@ from tools.analyze_mock_exam_frequency import (
 )
 
 
-def test_default_database_is_anchored_to_project_root() -> None:
-    assert DEFAULT_DATABASE_PATH == PROJECT_ROOT / "study_progress.sqlite3"
+def test_default_database_is_the_app_state_db() -> None:
+    assert DEFAULT_DATABASE_PATH == DEFAULT_DB_PATH
+    assert DEFAULT_DATABASE_PATH.parent == PROJECT_ROOT / "user_data"
 
 
 def test_open_database_does_not_create_a_missing_file(tmp_path) -> None:
     missing_database = tmp_path / "study_progress.sqlite3"
 
-    try:
+    with pytest.raises(FileNotFoundError):
         open_database(missing_database)
-    except FileNotFoundError:
-        pass
-    else:
-        raise AssertionError("Expected a missing database to be rejected")
 
     assert not missing_database.exists()
 

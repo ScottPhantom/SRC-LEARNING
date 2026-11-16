@@ -215,11 +215,11 @@ def test_exam_screen_preserves_answer_when_navigating(tmp_path: Path) -> None:
         )
     )
     screen = ExamScreen(session, (0.0, 0.9, 0.25, 0.1))
-    screen._option_widgets[0].setChecked(True)
+    screen.answer_options.option_widgets[0].setChecked(True)
     screen.go_to(1)
     assert session.items[0].selected_answer == "A"
     screen.go_to(0)
-    assert screen._option_widgets[0].isChecked()
+    assert screen.answer_options.option_widgets[0].isChecked()
     screen._timer.stop()
     screen.deleteLater()
     database.close()
@@ -245,13 +245,13 @@ def test_immediate_exam_reveals_and_locks_after_confirmation(tmp_path: Path) -> 
     )
     screen = ExamScreen(session, (0.0, 0.9, 0.25, 0.1))
     assert not screen.next.isEnabled()
-    screen._option_widgets[0].setChecked(True)
+    screen.answer_options.option_widgets[0].setChecked(True)
     screen._confirm_current()
     assert session.current.confirmed
     assert screen.viewer.answer_visible
     assert screen.next.isEnabled()
-    assert all(not widget.isEnabled() for widget in screen._option_widgets)
-    assert screen.navigator.item(0).text() == "1"
+    assert all(not widget.isEnabled() for widget in screen.answer_options.option_widgets)
+    assert screen.navigator.buttons[0].text() == "1"
     assert screen.navigator.state(0) == "correct"
     screen._timer.stop()
     screen.deleteLater()
@@ -275,9 +275,9 @@ def test_immediate_exam_marks_wrong_navigation_item_red(tmp_path: Path) -> None:
         )
     )
     screen = ExamScreen(session, (0.0, 0.9, 0.25, 0.1))
-    screen._option_widgets[1].setChecked(True)
+    screen.answer_options.option_widgets[1].setChecked(True)
     screen._confirm_current()
-    nav_item = screen.navigator.item(0)
+    nav_item = screen.navigator.buttons[0]
     assert nav_item.text() == "1"
     assert screen.navigator.state(0) == "wrong"
     screen._timer.stop()
@@ -315,7 +315,7 @@ def test_result_screen_retest_menu_exposes_both_navigation_choices(
         "Tự chọn lại option mới",
     ]
     total_row = len(result.items)
-    assert screen.table.columnCount() == 3
+    assert screen.table.columnCount() == 4
     assert screen.table.item(total_row, 1).text() == "FAIL"
     assert screen.table.item(total_row, 1).foreground().color() == QColor("#FF453A")
     screen.retest_same_action.trigger()
@@ -354,7 +354,7 @@ def test_result_table_has_total_pass_status_and_drives_image_review(
     assert result.passed
     assert result.status == "PASS"
     assert screen.table.rowCount() == 3
-    assert screen.table.columnCount() == 3
+    assert screen.table.columnCount() == 4
     assert [
         screen.table.horizontalHeaderItem(column).text() for column in range(3)
     ] == [
@@ -366,6 +366,7 @@ def test_result_table_has_total_pass_status_and_drives_image_review(
     assert screen.table.item(0, 1).text() == "A"
     assert screen.table.item(0, 1).foreground().color() == QColor("#30D158")
     assert screen.table.item(0, 2).text() == "5"
+    assert screen.table.item(0, 3).text() == "A"
     assert screen.table.item(2, 0).text() == "Total"
     assert screen.table.item(2, 1).text() == "PASS"
     assert screen.table.item(2, 1).foreground().color() == QColor("#30D158")
@@ -1376,7 +1377,7 @@ def test_main_window_default_and_minimum_sizes(tmp_path: Path) -> None:
     assert (window.width(), window.height()) == (1280, 800)
     assert (window.minimumWidth(), window.minimumHeight()) == (1100, 700)
     assert window.windowTitle() == APP_NAME == "SRC LEARNING"
-    assert window.app_header.title_label.text() == "SRC Learning"
+    assert window.app_header.home_button.text() == "SRC Learning"
     assert window.app_header.home_button.isFlat()
 
     window.thread_pool.waitForDone(2000)
@@ -1905,6 +1906,7 @@ def test_data_import_dialog_requires_code_and_emits_request() -> None:
 
     dialog.set_running(True)
     assert not dialog.code_input.isEnabled()
+    assert dialog.cancel_button.isEnabled()
     assert dialog.progress_bar.isVisible()
     dialog.update_progress("extract", 62, "Đang giải nén…")
     assert dialog.progress_bar.value() == 62
@@ -2464,19 +2466,19 @@ def test_light_home_background_asset_and_variant_rendering() -> None:
     painter.end()
 
     # 5. Test fallback khi missing asset
-    orig_pixmap = bg_mod._HOME_LIGHT_PIXMAP
-    orig_loaded = bg_mod._HOME_LIGHT_LOADED
+    orig_asset = bg_mod.LIGHT_HOME_BG_ASSET
     try:
-        bg_mod._HOME_LIGHT_PIXMAP = None
-        bg_mod._HOME_LIGHT_LOADED = True  # Giả lập không có pixmap
+        bg_mod.LIGHT_HOME_BG_ASSET = "missing/background.jpg"
+        get_home_light_pixmap.cache_clear()
+        assert get_home_light_pixmap() is None
         painter = QPainter(img)
         paint_app_background(
             painter, QRectF(0, 0, 800, 600), dark=False, variant="home"
         )
         painter.end()
     finally:
-        bg_mod._HOME_LIGHT_PIXMAP = orig_pixmap
-        bg_mod._HOME_LIGHT_LOADED = orig_loaded
+        bg_mod.LIGHT_HOME_BG_ASSET = orig_asset
+        get_home_light_pixmap.cache_clear()
 
     manager.apply("light")
     canvas.deleteLater()
@@ -2522,3 +2524,10 @@ def test_glass_header_and_shell_continuous_background_navigation(
     window.thread_pool.waitForDone(2000)
     window.close()
     db.close()
+
+
+def test_create_line_icon_rejects_unknown_type():
+    from app.ui.icons import create_line_icon
+
+    with pytest.raises(ValueError):
+        create_line_icon("nope")

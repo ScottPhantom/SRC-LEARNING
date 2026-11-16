@@ -145,3 +145,10 @@ def test_manual_answer_can_be_explicitly_skipped() -> None:
         )
         == ""
     )
+
+
+def test_read_existing_aborts_on_unreadable_csv(tmp_path: Path) -> None:
+    broken = tmp_path / "answers.csv"
+    broken.write_bytes(b"\xff\xfe\x00bad")
+    with pytest.raises(SystemExit):
+        build_answers.read_existing(broken)

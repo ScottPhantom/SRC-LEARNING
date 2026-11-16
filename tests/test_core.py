@@ -23,6 +23,7 @@ from app.repositories.database import CURRENT_SCHEMA_VERSION, Database
 from app.services.adaptive import AdaptiveReviewService
 from app.services.data_scanner import DataScannerService
 from app.services.exam import ExamResult, ExamService
+from app.services.exam_bank import ExamBankAllocator
 from app.services.study import CrammingService, FlashcardService
 
 
@@ -122,6 +123,7 @@ def test_answer_key_missing_file_logs_expected_absolute_path(
 def test_normalize_answer() -> None:
     assert normalize_answer(" d, b b a ") == "ABD"
     assert normalize_answer("xyz") == ""
+    assert normalize_answer("Because") == ""
 
 
 def test_flashcard_persists_position_and_progress(tmp_path: Path) -> None:
@@ -250,6 +252,17 @@ def test_cramming_single_item_wrong_then_correct(tmp_path: Path) -> None:
     assert reopened.resume_or_start().completed
     assert not reopened.start_new().completed
     database.close()
+
+
+def test_cramming_vanished_question_does_not_pollute_stats(tmp_path: Path) -> None:
+    subject = make_questions(tmp_path / "DATA", 2)
+    database = Database(tmp_path / "progress.sqlite3")
+    database.sync_questions(subject.questions, [subject.name])
+    CrammingService(database, subject.questions).start_new()
+    service = CrammingService(database, subject.questions[:1])
+    service.resume_or_start()
+    removed = subject.questions[1].id
+    assert database.question_error_stats([removed])[removed].total_attempts == 0
 
 
 def test_exam_pool_grading_and_history(tmp_path: Path) -> None:
@@ -433,10 +446,10 @@ def test_exam_weight_decreases_after_many_correct_answers() -> None:
         "mastered", total_attempts=20, wrong_count=0
     )
 
-    assert ExamService.question_weight(repeatedly_correct) < ExamService.question_weight(
+    assert ExamBankAllocator.error_weight(repeatedly_correct) < ExamBankAllocator.error_weight(
         never_attempted
     )
-    assert ExamService.question_weight(never_attempted) < ExamService.question_weight(
+    assert ExamBankAllocator.error_weight(never_attempted) < ExamBankAllocator.error_weight(
         frequently_wrong
     )
 
@@ -833,3 +846,59 @@ def test_answer_key_cramming_replaces_legacy_self_assessment_cycle(
     assert latest["grading_mode"] == "answer_key_v1"
     assert database.active_cram_cycle(subject.name)["id"] == upgraded_state.cycle_id
     database.close()
+
+
+def test_exam_submit_can_retry_after_database_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subject = make_questions(tmp_path / "DATA", 2)
+    database = Database(tmp_path / "retry.sqlite3")
+    database.sync_questions(subject.questions, [subject.name])
+    service = ExamService(
+        database,
+        subject.questions,
+        {question.relative_path: "A" for question in subject.questions},
+        rng=random.Random(1),
+    )
+    session = service.create_session(
+        ExamConfig(
+            subject=subject.name,
+            categories=("Selections_1_choose",),
+            question_count=2,
+            duration_minutes=10,
+            feedback_mode=FeedbackMode.DEFERRED,
+        )
+    )
+    real_save = database.save_exam_attempt
+    monkeypatch.setattr(
+        database,
+        "save_exam_attempt",
+        lambda **_: (_ for _ in ()).throw(sqlite3.OperationalError("disk full")),
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        session.submit()
+    assert not session.submitted
+
+    monkeypatch.setattr(database, "save_exam_attempt", real_save)
+    assert session.submit().total == 2
+    database.close()
+
+
+def test_normalize_relative_path_keeps_leading_dot_names() -> None:
+    from app.repositories.answer_key import normalize_relative_path
+
+    assert normalize_relative_path("./Fill_blanks/a.png") == "Fill_blanks/a.png"
+    assert normalize_relative_path(".hidden/a.png") == ".hidden/a.png"
+    assert normalize_relative_path("/x/a.png") == "x/a.png"
+    assert normalize_relative_path(".") == ""
+
+
+def test_file_sha256_cache_follows_content_change(tmp_path):
+    from app.services.question_bank_updates import file_sha256
+
+    path = tmp_path / "a.bin"
+    path.write_bytes(b"one")
+    first = file_sha256(path)
+    assert file_sha256(path) == first
+    path.write_bytes(b"three")
+    assert file_sha256(path) != first

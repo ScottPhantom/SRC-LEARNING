@@ -110,13 +110,24 @@ def test_sheet_catalog_rejects_bad_approved_rows(bad_row: str) -> None:
         DataPackageCatalog.from_sheet_csv(sheet_csv(bad_row))
 
 
-def test_sheet_catalog_rejects_duplicate_ids() -> None:
+def test_sheet_catalog_skips_duplicate_ids() -> None:
     content = sheet_csv(
         f"AIL303m,approved-drive-file-id,154,{'a' * 64},100,Đã bật",
         f"CPV301,approved-drive-file-id,89,{'b' * 64},200,Đã bật",
     )
-    with pytest.raises(DataPackageError, match="trùng lặp"):
-        DataPackageCatalog.from_sheet_csv(content)
+    catalog = DataPackageCatalog.from_sheet_csv(content)
+    assert catalog.resolve("approved-drive-file-id").subject == "AIL303m"
+
+
+def test_sheet_catalog_skips_bad_row_and_keeps_others() -> None:
+    content = sheet_csv(
+        "BAD101,bad-drive-file-id,1,invalid,100,Đã bật",
+        f"CPV301,other-drive-file-id,89,{'b' * 64},200,Đã bật",
+    )
+    catalog = DataPackageCatalog.from_sheet_csv(content)
+    assert catalog.resolve("other-drive-file-id").subject == "CPV301"
+    with pytest.raises(UnknownPackageCodeError):
+        catalog.resolve("bad-drive-file-id")
 
 
 def test_catalog_source_caches_valid_sheet_and_falls_back_offline(tmp_path: Path) -> None:
@@ -181,23 +192,80 @@ def test_invalid_sheet_does_not_replace_last_good_cache(tmp_path: Path) -> None:
     assert cache.read_bytes() == good
 
 
-def test_catalog_source_rejects_other_sheet_tabs(tmp_path: Path) -> None:
-    called = False
+def test_catalog_source_accepts_any_gid_but_rejects_wrong_tab_content(
+    tmp_path: Path,
+) -> None:
+    url = "https://docs.google.com/spreadsheets/d/e/example/pub?gid=0&output=csv"
+    good = sheet_csv(f"AIL303m,approved-drive-file-id,154,{'a' * 64},100,Đã bật")
+    online = PackageCatalogSource(url, tmp_path / "a.csv", fetch=lambda _u: good).load()
+    assert online.source == "Google Sheets"
 
-    def fetch(_url: str) -> bytes:
-        nonlocal called
-        called = True
-        return b""
-
-    source = PackageCatalogSource(
-        "https://docs.google.com/spreadsheets/d/e/example/pub?gid=0&output=csv",
-        tmp_path / "catalog.csv",
-        fetch=fetch,
-    )
-    result = source.load()
+    wrong_tab = "Tên,Ghi chú\nfoo,bar\n".encode("utf-8")
+    result = PackageCatalogSource(url, tmp_path / "b.csv", fetch=lambda _u: wrong_tab).load()
     assert result.source == "bản đóng gói"
-    assert not called
     assert "GOOGLE_IDS" in result.warning
+
+
+def test_catalog_fetch_blocks_foreign_redirect_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import package_catalog_source as source_module
+
+    handler = source_module._GoogleOnlyRedirect()
+    with pytest.raises(DataPackageError, match="chuyển hướng"):
+        handler.redirect_request(None, None, 302, "", {}, "https://evil.example/x.csv")
+
+    calls = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size: int) -> bytes:
+            return b"ok"
+
+    def flaky_open(_request, timeout: int):
+        nonlocal calls
+        calls += 1
+        if calls < source_module.FETCH_ATTEMPTS:
+            raise OSError("temporary")
+        return Response()
+
+    monkeypatch.setattr(source_module._OPENER, "open", flaky_open)
+    monkeypatch.setattr(source_module.time, "sleep", lambda _s: None)
+    assert PackageCatalogSource._fetch("https://docs.google.com/x") == b"ok"
+    assert calls == source_module.FETCH_ATTEMPTS
+
+
+def test_installer_cancel_leaves_data_untouched(tmp_path: Path) -> None:
+    archive = make_subject_archive(tmp_path)
+    data = tmp_path / "DATA"
+    with pytest.raises(DataPackageError, match="hủy"):
+        installer_for(archive).install(
+            "approved-drive-file-id", data, cancelled=lambda: True
+        )
+    assert list(data.iterdir()) == []
+
+
+def test_recovery_purges_only_expired_copies(tmp_path: Path) -> None:
+    import time
+
+    from app.services.subject_management import RECOVERY_MAX_AGE_SECONDS
+
+    data = tmp_path / "DATA"
+    (data / "AIL303m").mkdir(parents=True)
+    (data / "CPV301").mkdir()
+    manager = SubjectManager(data)
+    old = manager.remove("AIL303m")
+    fresh = manager.remove("CPV301")
+    expired = time.time() - RECOVERY_MAX_AGE_SECONDS - 60
+    os.utime(old, (expired, expired))
+    manager.purge_expired_recovery()
+    assert not old.exists()
+    assert fresh.is_dir()
 
 
 def test_catalog_url_can_be_supplied_next_to_existing_executable(
