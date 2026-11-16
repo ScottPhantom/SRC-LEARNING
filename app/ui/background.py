@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from PyQt5.QtCore import QPointF, QRectF, Qt
@@ -9,10 +10,6 @@ from PyQt5.QtGui import QColor, QLinearGradient, QPainter, QPixmap, QRadialGradi
 from PyQt5.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger(__name__)
-
-# Cached background image pixmap
-_HOME_LIGHT_PIXMAP: QPixmap | None = None
-_HOME_LIGHT_LOADED: bool = False
 
 LIGHT_HOME_BG_ASSET = "app/ui/assets/backgrounds/light/pexels-codioful-7130573.jpg"
 
@@ -23,7 +20,6 @@ def resolve_resource_path(relative_path: str | Path) -> Path:
     Supports:
     - Running directly (python main.py)
     - Running via pytest
-    - Running from any current working directory
     - PyInstaller standalone build (one-folder / one-file via sys._MEIPASS)
     """
     rel = Path(relative_path)
@@ -37,36 +33,18 @@ def resolve_resource_path(relative_path: str | Path) -> Path:
 
     # 2. Source execution relative to project root (parent of 'app')
     project_root = Path(__file__).resolve().parent.parent.parent
-    source_path = project_root / rel
-    if source_path.exists():
-        return source_path
-
-    # 3. Fallback relative to CWD
-    cwd_path = Path.cwd() / rel
-    if cwd_path.exists():
-        return cwd_path
-
-    return source_path
+    return project_root / rel
 
 
+@lru_cache(maxsize=1)
 def get_home_light_pixmap() -> QPixmap | None:
     """Lazy load and cache the Home Light Mode background pixmap."""
-    global _HOME_LIGHT_PIXMAP, _HOME_LIGHT_LOADED
-    if _HOME_LIGHT_LOADED:
-        return _HOME_LIGHT_PIXMAP
-
-    _HOME_LIGHT_LOADED = True
     asset_path = resolve_resource_path(LIGHT_HOME_BG_ASSET)
-
-    if asset_path.is_file():
-        pixmap = QPixmap(str(asset_path))
-        if not pixmap.isNull():
-            _HOME_LIGHT_PIXMAP = pixmap
-            return _HOME_LIGHT_PIXMAP
-
-    logger.warning("Could not load Light Home background asset at: %s", asset_path)
-    _HOME_LIGHT_PIXMAP = None
-    return None
+    pixmap = QPixmap(str(asset_path))
+    if pixmap.isNull():
+        logger.warning("Could not load Light Home background asset at: %s", asset_path)
+        return None
+    return pixmap
 
 
 def is_dark_theme() -> bool:
