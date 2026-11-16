@@ -97,7 +97,7 @@ class DataImportDialog(QDialog):
         self._running = running
         self.code_input.setEnabled(not running)
         self.install_button.setEnabled(not running)
-        self.cancel_button.setEnabled(not running)
+        # Cancel stays enabled: closing emits rejected, which stops the worker.
         if running:
             self.progress_bar.show()
             self.status_label.setProperty("error", False)
@@ -135,8 +135,3 @@ class DataImportDialog(QDialog):
             pass
         self.install_button.clicked.connect(self.accept)
         self.cancel_button.hide()
-
-    def reject(self) -> None:
-        if self._running:
-            return
-        super().reject()

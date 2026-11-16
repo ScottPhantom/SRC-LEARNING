@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
+import shutil
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import CATEGORIES, IMAGE_EXTENSIONS
+
+RECOVERY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 class SubjectManagementError(RuntimeError):
@@ -42,6 +46,14 @@ def subject_destination(data_dir: Path, name: str) -> Path:
     if destination.parent != root or destination.is_symlink():
         raise SubjectManagementError("Đường dẫn môn học không an toàn.")
     return destination
+
+
+def touch_recovery(path: Path) -> None:
+    """Start the recovery expiry clock; a moved dir keeps its old mtime."""
+    try:
+        os.utime(path)
+    except OSError:
+        pass  # worst case the copy expires early; never fail the move for it
 
 
 def inspect_tree(path: Path) -> tuple[int, int, bool]:
@@ -125,8 +137,22 @@ class SubjectManager:
             raise SubjectManagementError(f"Không tạo được vùng khôi phục: {exc}") from exc
         return recovery
 
+    def purge_expired_recovery(self, now: float | None = None) -> None:
+        """Delete recovery copies older than RECOVERY_MAX_AGE_SECONDS."""
+        recovery = self._recovery_dir()
+        cutoff = (time.time() if now is None else now) - RECOVERY_MAX_AGE_SECONDS
+        for entry in recovery.iterdir():
+            try:
+                if entry.is_symlink() or not entry.is_dir():
+                    continue
+                if entry.stat().st_mtime < cutoff:
+                    shutil.rmtree(entry)
+            except OSError:
+                continue  # locked or already gone; retry on the next purge
+
     def reserve_recovery_path(self, name: str) -> Path:
         self.destination(name, require_existing=False)
+        self.purge_expired_recovery()
         return self._recovery_dir() / f"{name}-{uuid.uuid4().hex}"
 
     def remove(self, name: str) -> Path:
@@ -138,6 +164,7 @@ class SubjectManager:
             raise SubjectManagementError(
                 f"Không chuyển được môn vào vùng khôi phục: {exc}"
             ) from exc
+        touch_recovery(backup)
         return backup
 
     def restore(self, name: str, backup: Path) -> Path | None:
@@ -151,6 +178,7 @@ class SubjectManager:
         try:
             if displaced is not None:
                 os.replace(destination, displaced)
+                touch_recovery(displaced)
             os.replace(backup, destination)
         except OSError as exc:
             if displaced is not None and displaced.exists() and not destination.exists():
