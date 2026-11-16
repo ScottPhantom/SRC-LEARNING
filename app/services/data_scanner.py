@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import re
 import unicodedata
 from pathlib import Path
 
@@ -86,6 +85,6 @@ class DataScannerService:
             for row in reader:
                 relative = unicodedata.normalize("NFC", (row["image_name"] or "").strip())
                 letters = (row["option_letters"] or "").strip().upper()
-                if re.fullmatch(r"A(?:B(?:C(?:D(?:E(?:F(?:G(?:H)?)?)?)?)?)?)?", letters):
+                if letters and letters == "ABCDEFGH"[: len(letters)]:
                     result[relative] = tuple(letters)
         return result

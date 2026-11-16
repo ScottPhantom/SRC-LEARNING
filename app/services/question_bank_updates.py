@@ -5,16 +5,18 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import unicodedata
+from io import StringIO
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 from app.config import MULTIPLE_CATEGORY
 from app.domain.models import Question, Subject, normalize_answer
 from app.repositories.answer_key import AnswerKeyRepository, normalize_relative_path
-from app.repositories.database import Database
+from app.repositories.database import Database, utc_now
 
 LOGGER = logging.getLogger(__name__)
 MANIFEST_SCHEMA_VERSION = 1
@@ -30,10 +32,6 @@ NOTIFICATION_CATEGORY_LABELS = {
 }
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def stable_question_id(subject: str, relative_path: str) -> str:
     stable_key = (
         f"{unicodedata.normalize('NFC', subject)}/"
@@ -42,12 +40,19 @@ def stable_question_id(subject: str, relative_path: str) -> str:
     return hashlib.sha256(stable_key.encode("utf-8")).hexdigest()
 
 
-def file_sha256(path: Path) -> str:
+@lru_cache(maxsize=65536)
+def _sha256_cached(path: Path, mtime_ns: int, size: int) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    # Cached per process by (mtime, size): repeat checks skip re-reading unchanged images.
+    stat = path.stat()
+    return _sha256_cached(path, stat.st_mtime_ns, stat.st_size)
 
 
 @dataclass(slots=True)
@@ -271,8 +276,6 @@ class QuestionBankUpdateChecker:
 
     @staticmethod
     def _answers_bytes(entries: list[BankEntry]) -> bytes:
-        from io import StringIO
-
         output = StringIO(newline="")
         writer = csv.writer(output)
         writer.writerow(["image_name", "correct_answer"])
@@ -311,8 +314,6 @@ class QuestionBankUpdateChecker:
 
     @staticmethod
     def _change_report_bytes(changes: list[BankChange]) -> bytes:
-        from io import StringIO
-
         output = StringIO(newline="")
         writer = csv.writer(output)
         writer.writerow(
@@ -733,7 +734,7 @@ class QuestionBankUpdateChecker:
                 notification_changes=self._notification_change_rows(result.changes),
                 finalize=finalize_files,
             )
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             result.errors.append(f"Không ghi được answer bank v{next_version}: {exc}")
             LOGGER.exception(
                 "Không ghi được answer bank %s v%d", subject.name, next_version
@@ -750,8 +751,3 @@ class QuestionBankUpdateChecker:
             len(result.deleted),
         )
         return result
-
-    def check(
-        self, subjects: list[Subject], *, apply: bool = True
-    ) -> list[BankUpdateResult]:
-        return [self.check_subject(subject, apply=apply) for subject in subjects]

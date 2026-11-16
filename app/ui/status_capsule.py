@@ -73,8 +73,7 @@ class StatusCapsule(QFrame):
 
     def set_data_ready(self, subject_count: int, data_dir: Path) -> None:
         self.dot.set_color(QColor("#0A84FF"))  # Accent Blue theo mockup đã duyệt
-        môn_text = "môn học"
-        self.label.setText(f"Dữ liệu đã sẵn sàng · {subject_count} {môn_text}")
+        self.label.setText(f"Dữ liệu đã sẵn sàng · {subject_count} môn học")
         self.setToolTip(f"Đường dẫn dữ liệu: {data_dir.resolve()}")
         self.setAccessibleName(f"Dữ liệu đã sẵn sàng, {subject_count} môn học")
         self.action_button.hide()
@@ -111,22 +110,6 @@ class StatusCapsule(QFrame):
         self.setAccessibleName(f"Lỗi quét dữ liệu: {message}")
         self.action_button.show()
         self.show()
-
-    def setText(self, text: str) -> None:
-        """API tương thích ngược cho main_controller (self.home.notice.setText)."""
-        if "Không thể quét" in text or "Lỗi" in text or "lỗi" in text:
-            self.set_error(text)
-        elif "Không tìm thấy" in text:
-            self.dot.set_color(QColor("#EF4444"))
-            self.label.setText(text)
-            self.action_button.show()
-        elif "Đang quét" in text or "Đã tìm thấy" in text or "sẵn sàng" in text:
-            self.dot.set_color(QColor("#0A84FF"))
-            self.label.setText(text)
-            self.action_button.hide()
-        else:
-            self.label.setText(text)
-            self.action_button.hide()
 
     def text(self) -> str:
         return self.label.text()

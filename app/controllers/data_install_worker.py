@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from PyQt5.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
@@ -10,6 +11,14 @@ from app.services.data_package_installer import (
     DataPackageInstaller,
 )
 from app.services.package_catalog_source import PackageCatalogSource
+
+
+def _safe_emit(signal, *args) -> None:
+    # Receiver may be deleted while the worker thread is still running.
+    try:
+        signal.emit(*args)
+    except RuntimeError:
+        pass
 
 
 class DataInstallSignals(QObject):
@@ -34,15 +43,11 @@ class CatalogRefreshTask(QRunnable):
         try:
             result = self.source.load()
         except (DataPackageError, OSError, RuntimeError, ValueError) as exc:
-            try:
-                self.signals.failed.emit(f"Không đọc được danh mục môn học: {exc}")
-            except RuntimeError:
-                pass
+            _safe_emit(
+                self.signals.failed, f"Không đọc được danh mục môn học: {exc}"
+            )
             return
-        try:
-            self.signals.completed.emit(result)
-        except RuntimeError:
-            pass
+        _safe_emit(self.signals.completed, result)
 
 
 class DataInstallTask(QRunnable):
@@ -59,13 +64,11 @@ class DataInstallTask(QRunnable):
         self.code = code
         self.data_dir = Path(data_dir)
         self.replace_existing = replace_existing
+        self.cancelled = threading.Event()
         self.signals = DataInstallSignals()
 
     def _report(self, stage: str, percent: int, message: str) -> None:
-        try:
-            self.signals.progress.emit(stage, percent, message)
-        except RuntimeError:
-            pass
+        _safe_emit(self.signals.progress, stage, percent, message)
 
     @pyqtSlot()
     def run(self) -> None:
@@ -75,20 +78,12 @@ class DataInstallTask(QRunnable):
                 self.data_dir,
                 replace_existing=self.replace_existing,
                 progress=self._report,
+                cancelled=self.cancelled.is_set,
             )
         except DataPackageError as exc:
-            try:
-                self.signals.failed.emit(str(exc))
-            except RuntimeError:
-                pass
+            _safe_emit(self.signals.failed, str(exc))
             return
         except (OSError, RuntimeError, ValueError) as exc:
-            try:
-                self.signals.failed.emit(f"Không thể cài đặt dữ liệu: {exc}")
-            except RuntimeError:
-                pass
+            _safe_emit(self.signals.failed, f"Không thể cài đặt dữ liệu: {exc}")
             return
-        try:
-            self.signals.completed.emit(result)
-        except RuntimeError:
-            pass
+        _safe_emit(self.signals.completed, result)

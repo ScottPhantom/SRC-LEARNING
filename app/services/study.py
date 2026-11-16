@@ -6,7 +6,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from app.domain.models import Question, normalize_answer
+from app.domain.models import Question, normalize_answer, score_answer
 from app.repositories.answer_key import AnswerKeyRepository, normalize_relative_path
 from app.repositories.database import Database
 
@@ -115,6 +115,7 @@ class FlashcardService:
         return self.state()
 
 
+
 @dataclass(slots=True)
 class CramState:
     cycle_id: int
@@ -220,34 +221,26 @@ class CrammingService:
         )
         return self.state()
 
+    def _completed_state(self, stats: dict) -> CramState:
+        return CramState(
+            cycle_id=self.cycle_id or 0,
+            question=None,
+            current_round=int(stats.get("current_round", 0)),
+            total_rounds=int(stats.get("total_rounds", 0)),
+            remaining=0,
+            round_total=int(stats.get("round_total", 0)),
+            round_mastered=int(stats.get("round_mastered", 0)),
+            mastered=int(stats.get("mastered", 0)),
+            wrong=int(stats.get("wrong", 0)),
+            completed=True,
+        )
+
     def state(self) -> CramState:
         if self.cycle_id is None:
-            return CramState(
-                cycle_id=0,
-                question=None,
-                current_round=0,
-                total_rounds=0,
-                remaining=0,
-                round_total=0,
-                round_mastered=0,
-                mastered=0,
-                wrong=0,
-                completed=True,
-            )
+            return self._completed_state({})
         stats = self.database.cram_stats(self.cycle_id)
         if not stats or stats.get("status") == "completed":
-            return CramState(
-                cycle_id=self.cycle_id,
-                question=None,
-                current_round=int(stats.get("current_round", 0)),
-                total_rounds=int(stats.get("total_rounds", 0)),
-                remaining=0,
-                round_total=int(stats.get("round_total", 0)),
-                round_mastered=int(stats.get("round_mastered", 0)),
-                mastered=int(stats.get("mastered", 0)),
-                wrong=int(stats.get("wrong", 0)),
-                completed=True,
-            )
+            return self._completed_state(stats)
         item = self.database.cram_current_item(self.cycle_id)
         # Files removed after the snapshot are completed as unavailable so the
         # cycle can always make progress.
@@ -257,26 +250,15 @@ class CrammingService:
                 self.cycle_id,
                 item["question_id"],
             )
-            self.database.rate_cram_item(self.cycle_id, str(item["question_id"]), True)
+            self.database.rate_cram_item(
+                self.cycle_id, str(item["question_id"]), True, record_stats=False
+            )
             stats = self.database.cram_stats(self.cycle_id)
             item = self.database.cram_current_item(self.cycle_id)
-        if not stats or stats.get("status") == "completed" or item is None:
-            return (
-                self.state()
-                if stats.get("status") != "completed"
-                else CramState(
-                    cycle_id=self.cycle_id,
-                    question=None,
-                    current_round=int(stats.get("current_round", 0)),
-                    total_rounds=int(stats.get("total_rounds", 0)),
-                    remaining=0,
-                    round_total=int(stats.get("round_total", 0)),
-                    round_mastered=int(stats.get("round_mastered", 0)),
-                    mastered=int(stats.get("mastered", 0)),
-                    wrong=int(stats.get("wrong", 0)),
-                    completed=True,
-                )
-            )
+        if stats.get("status") == "completed":
+            return self._completed_state(stats)
+        if item is None:
+            return self.state()
         return CramState(
             cycle_id=self.cycle_id,
             question=self.questions[str(item["question_id"])],

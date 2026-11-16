@@ -276,12 +276,9 @@ class MainWindow(QMainWindow):
             return
         dialog = DataImportDialog(self)
         dialog.install_requested.connect(self._start_data_install)
-        dialog.finished.connect(self._data_import_dialog_closed)
+        dialog.finished.connect(lambda *_: setattr(self, "_data_import_dialog", None))
         self._data_import_dialog = dialog
         dialog.open()
-
-    def _data_import_dialog_closed(self) -> None:
-        self._data_import_dialog = None
 
     def _management_panel(self) -> SubjectManagementPanel | None:
         page = self._dynamic_page
@@ -314,11 +311,15 @@ class MainWindow(QMainWindow):
             return False
         if not (self.database.active_flash_session(name) or self.database.active_cram_cycle(name)):
             return True
-        if not self._ask_cancel_active_learning(name):
-            return False
-        self.database.delete_active_flash_session(name)
-        self.database.delete_active_cram_cycle(name)
-        return True
+        return self._ask_cancel_active_learning(name)
+
+    def _discard_subject_sessions(self, name: str) -> None:
+        """Drop saved flash/cram sessions only after remove/install succeeded."""
+        try:
+            self.database.delete_active_flash_session(name)
+            self.database.delete_active_cram_cycle(name)
+        except sqlite3.Error as exc:
+            LOGGER.warning("Không xóa được phiên học của %s: %s", name, exc)
 
     def show_subject_management(self) -> None:
         self.show_settings(management=True)
@@ -346,9 +347,6 @@ class MainWindow(QMainWindow):
             panel.set_subjects(infos)
         except OSError as exc:
             panel.status_label.setText(f"Không đọc được danh sách môn học: {exc}")
-
-    def _add_from_management(self) -> None:
-        self.show_data_import()
 
     def _delete_subject(self, name: str) -> None:
         panel = self._management_panel()
@@ -397,6 +395,7 @@ class MainWindow(QMainWindow):
             panel.show_operation_message(message)
             self.refresh_data()
             return
+        self._discard_subject_sessions(name)
         self._rescan_requested = self._scan_running
         self.subjects.pop(name, None)
         self.answer_reports.pop(name, None)
@@ -410,7 +409,10 @@ class MainWindow(QMainWindow):
 
     def _start_data_install(self, code: str) -> None:
         dialog = self._data_import_dialog
-        if dialog is None or self._data_install_task is not None or self._catalog_task is not None:
+        if dialog is None:
+            return
+        if self._data_install_task is not None or self._catalog_task is not None:
+            dialog.show_error("Lượt cài trước vẫn đang dừng. Hãy thử lại sau giây lát.")
             return
         try:
             self._data_package_installer.catalog.extract_file_id(code)
@@ -495,6 +497,7 @@ class MainWindow(QMainWindow):
         task.signals.progress.connect(dialog.update_progress)
         task.signals.completed.connect(self._data_install_completed)
         task.signals.failed.connect(self._data_install_failed)
+        dialog.rejected.connect(task.cancelled.set)
         self._data_install_task = task
         self.thread_pool.start(task)
 
@@ -527,6 +530,7 @@ class MainWindow(QMainWindow):
             self.answer_reports.pop(result.subject, None)
             self.home.set_subjects(remaining, self.data_dir)
             self._reset_watch_paths(remaining)
+        self._discard_subject_sessions(result.subject)
         if dialog is not None:
             dialog.show_complete(
                 f"Đã cài {result.subject} với {result.question_count} câu hỏi."
@@ -562,7 +566,7 @@ class MainWindow(QMainWindow):
             return
         self._scan_running = False
         LOGGER.warning("Không quét được %s: %s", scanned_dir, message)
-        self.home.notice.setText(f"Không thể quét dữ liệu: {message}")
+        self.home.status_capsule.set_error(f"Không thể quét dữ liệu: {message}")
         if self._rescan_requested:
             self._rescan_requested = False
             self.refresh_data()
@@ -576,18 +580,28 @@ class MainWindow(QMainWindow):
         all_questions = [
             question for subject in subjects for question in subject.questions
         ]
-        self.database.sync_questions(
-            all_questions, [subject.name for subject in subjects]
-        )
+        try:
+            self.database.sync_questions(
+                all_questions, [subject.name for subject in subjects]
+            )
+        except (sqlite3.Error, OSError) as exc:
+            LOGGER.exception("Không đồng bộ được câu hỏi")
+            self.home.status_capsule.set_error(f"Không lưu được dữ liệu học: {exc}")
+            return
         # Windows keeps watched files/directories open. Release their handles
         # while the answer bank atomically replaces answers.csv and manifests.
         watched_paths = self.watcher.directories() + self.watcher.files()
         if watched_paths:
             self.watcher.removePaths(watched_paths)
         try:
-            bank_results = QuestionBankUpdateChecker(
+            checker = QuestionBankUpdateChecker(
                 self.database, self.settings.crop_region
-            ).check(subjects, apply=True)
+            )
+            bank_results = [checker.check_subject(s, apply=True) for s in subjects]
+        except (sqlite3.Error, OSError) as exc:
+            LOGGER.exception("Không cập nhật được question bank")
+            self.home.status_capsule.set_error(f"Không cập nhật được đáp án: {exc}")
+            return
         finally:
             self._reset_watch_paths(subjects)
         answer_repository = AnswerKeyRepository()
@@ -609,11 +623,13 @@ class MainWindow(QMainWindow):
         errors = [
             f"{result.subject}: " + "; ".join(result.errors)
             for result in results
-            if getattr(result, "errors", None)
+            if result.errors
         ]
         if errors:
             LOGGER.warning("Question bank update chưa hoàn tất: %s", " | ".join(errors))
-            self.home.notice.setText("Lỗi cập nhật đáp án: " + " | ".join(errors))
+            self.home.status_capsule.set_error(
+                "Lỗi cập nhật đáp án: " + " | ".join(errors)
+            )
 
     def _reset_watch_paths(self, subjects: list[Subject]) -> None:
         old_paths = self.watcher.directories() + self.watcher.files()
@@ -849,10 +865,8 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, theme_name: str) -> None:
         self.theme_manager.apply(theme_name)
-        if hasattr(self, "app_header"):
-            self.app_header.update_theme()
-        if hasattr(self, "home"):
-            self.home.update_theme()
+        self.app_header.update_theme()
+        self.home.update_theme()
         if self._dynamic_page is not None and hasattr(
             self._dynamic_page, "update_theme"
         ):
@@ -891,7 +905,7 @@ class MainWindow(QMainWindow):
         panel = page.subject_management_panel
         panel.delete_requested.connect(self._delete_subject)
         panel.refresh_requested.connect(self._refresh_subject_management)
-        panel.add_requested.connect(self._add_from_management)
+        panel.add_requested.connect(self.show_data_import)
         page.tabs.currentChanged.connect(lambda _index: self._refresh_subject_management())
         self._set_dynamic_page(page)
         if management:
@@ -953,21 +967,19 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._closing = True
-        if hasattr(self, "watcher"):
-            try:
-                dirs = self.watcher.directories()
-                if dirs:
-                    self.watcher.removePaths(dirs)
-                files = self.watcher.files()
-                if files:
-                    self.watcher.removePaths(files)
-            except RuntimeError as exc:
-                LOGGER.debug(
-                    "File watcher was already disposed during shutdown: %s", exc
-                )
-        if hasattr(self, "thread_pool"):
-            self.thread_pool.clear()
-            self.thread_pool.waitForDone(1500)
+        try:
+            dirs = self.watcher.directories()
+            if dirs:
+                self.watcher.removePaths(dirs)
+            files = self.watcher.files()
+            if files:
+                self.watcher.removePaths(files)
+        except RuntimeError as exc:
+            LOGGER.debug(
+                "File watcher was already disposed during shutdown: %s", exc
+            )
+        self.thread_pool.clear()
+        self.thread_pool.waitForDone(1500)
         geometry = self.saveGeometry().toHex().data().decode("ascii")
         self.database.set_setting("window_geometry", geometry)
         super().closeEvent(event)

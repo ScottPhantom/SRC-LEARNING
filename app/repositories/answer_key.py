@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from app.config import MULTIPLE_CATEGORY, TRUE_FALSE_CATEGORY
+from app.config import MULTIPLE_CATEGORY
 from app.domain.models import Question, normalize_answer
 
 LOGGER = logging.getLogger(__name__)
@@ -32,7 +32,8 @@ def normalize_relative_path(value: str) -> str:
     text = unicodedata.normalize(
         "NFC", value.strip().strip('"\'').replace("\\", "/")
     )
-    return PurePosixPath(text).as_posix().lstrip("./")
+    posix = PurePosixPath(text).as_posix().lstrip("/")
+    return "" if posix == "." else posix
 
 
 class AnswerKeyRepository:
@@ -202,6 +203,4 @@ class AnswerKeyRepository:
             return 2 <= len(normalized) <= len(question.options) and all(
                 option in question.options for option in normalized
             )
-        if question.category == TRUE_FALSE_CATEGORY:
-            return len(normalized) == 1 and normalized in question.options
         return len(normalized) == 1 and normalized in question.options

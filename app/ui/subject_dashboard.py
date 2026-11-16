@@ -431,6 +431,7 @@ class StudyModeCard(QFrame):
         self.style().polish(self)
         if self._animation is not None:
             self._animation.stop()
+            self._animation.deleteLater()
         target_size = self.HOVER_SIZE if hovered else self.BASE_SIZE
         target_blur = 55.0 if hovered else 22.0
         target_offset = QPointF(0, 15 if hovered else 8)
@@ -470,6 +471,7 @@ class StudyModeCard(QFrame):
     def set_dimmed(self, dimmed: bool) -> None:
         if self._dim_animation is not None:
             self._dim_animation.stop()
+            self._dim_animation.deleteLater()
         if dimmed:
             self.focus_overlay.show()
             self.focus_overlay.raise_()
@@ -597,10 +599,14 @@ class QuickReviewDialog(QDialog):
         position = f"{self.current_index + 1}/{len(self.reviews)}"
         self.setWindowTitle(f"Ôn tập nhanh — {filename} ({position})")
         self.heading.setText(f"{filename}  •  {position}")
-        self.viewer.load_image(
-            self.review.question.absolute_path,
-            category=self.review.question.category,
-        )
+        try:
+            self.viewer.load_image(
+                self.review.question.absolute_path,
+                category=self.review.question.category,
+            )
+        except ValueError:
+            self.answer_label.setText("Không mở được ảnh câu hỏi")
+            return
         self.answer_label.setText(self.review.correct_answer or "Chưa có đáp án")
 
     def show_next(self) -> None:

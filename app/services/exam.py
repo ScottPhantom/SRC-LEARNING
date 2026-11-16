@@ -3,22 +3,19 @@ from __future__ import annotations
 import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 
 from app.domain.models import (
     ExamConfig,
     ExamQuestion,
     Question,
-    QuestionErrorStat,
     normalize_answer,
 )
 from app.repositories.answer_key import AnswerKeyRepository, normalize_relative_path
-from app.repositories.database import Database
+from app.repositories.database import Database, utc_now
 from app.services.exam_bank import ExamBankAllocator
 
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+MAX_SCORE = 10.0
+PASS_SCORE = 7.0
 
 
 @dataclass(slots=True)
@@ -34,7 +31,7 @@ class ExamResult:
 
     @property
     def passed(self) -> bool:
-        return self.score >= 7.0
+        return self.score >= PASS_SCORE
 
     @property
     def status(self) -> str:
@@ -77,13 +74,14 @@ class ExamSession:
     def submit(self, reason: str = "user") -> ExamResult:
         if self.submitted:
             raise ValueError("Bài thi đã được nộp.")
-        self.submitted = True
         total = len(self.items)
-        question_value = 10.0 / total if total else 0.0
-        raw_scores = [item.calculate_score(question_value) for item in self.items]
-        for item, raw_score in zip(self.items, raw_scores, strict=True):
+        question_value = MAX_SCORE / total if total else 0.0
+        score = 0.0
+        for item in self.items:
+            raw_score = item.calculate_score(question_value)
             item.awarded_score = round(raw_score, 2)
-        score = round(sum(raw_scores), 2)
+            score += raw_score
+        score = round(score, 2)
         records = []
         for item in self.items:
             records.append(
@@ -109,6 +107,7 @@ class ExamSession:
             score=score,
             answers=records,
         )
+        self.submitted = True
         correct = sum(item.is_correct for item in self.items)
         unanswered = sum(not item.selected_answer for item in self.items)
         return ExamResult(
@@ -118,7 +117,7 @@ class ExamSession:
             correct=correct,
             unanswered=unanswered,
             score=score,
-            score_percent=round(score * 10.0, 2),
+            score_percent=round(score * 100 / MAX_SCORE, 2),
             items=self.items,
         )
 
@@ -153,10 +152,6 @@ class ExamService:
             ):
                 result.append(replace(question, correct_answer=answer))
         return result
-
-    @staticmethod
-    def question_weight(stat: QuestionErrorStat) -> float:
-        return ExamBankAllocator.error_weight(stat)
 
     def create_session(self, config: ExamConfig) -> ExamSession:
         if config.question_count <= 0:

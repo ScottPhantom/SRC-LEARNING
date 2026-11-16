@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from collections import OrderedDict
 from pathlib import Path
-from typing import ClassVar
 
-from PIL import Image
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QImage, QKeySequence, QPixmap
+from PyQt5.QtCore import QRect, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QImageReader, QKeySequence, QPixmap, QPixmapCache
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -27,16 +24,15 @@ class QuestionImageViewer(QGraphicsView):
     answer_hidden = pyqtSignal()
     answer_visibility_changed = pyqtSignal(bool)
     image_copied = pyqtSignal()
-    _pixmap_cache: ClassVar[
-        OrderedDict[tuple[str, int, tuple[float, float, float, float]], QPixmap]
-    ] = OrderedDict()
-    _cache_limit: ClassVar[int] = 24
+    _cache_limit_kb = 64 * 1024  # Qt evicts least-recently-used pixmaps past this
+    _max_pixels = 89_478_485  # same decompression-bomb threshold Pillow uses
     _zoom_factor = 1.20
     _min_zoom = -4
     _max_zoom = 7
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        QPixmapCache.setCacheLimit(max(QPixmapCache.cacheLimit(), self._cache_limit_kb))
         self.setScene(QGraphicsScene(self))
         self.setAlignment(Qt.AlignCenter)
         self.setFrameShape(QGraphicsView.NoFrame)
@@ -127,9 +123,7 @@ class QuestionImageViewer(QGraphicsView):
         self._copy_toast_timer.timeout.connect(self.copy_toast.hide)
 
     def _build_category_notice(self) -> None:
-        self.category_notice = QLabel(
-            "Chú ý: Nhiều đáp án (Multiple_choose)", self
-        )
+        self.category_notice = QLabel("Chú ý: Nhiều đáp án (Multiple_choose)", self)
         self.category_notice.setObjectName("multipleChoiceNotice")
         self.category_notice.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.category_notice.adjustSize()
@@ -153,13 +147,7 @@ class QuestionImageViewer(QGraphicsView):
                 category=self._category,
             )
 
-    def set_mask_region(self, region: tuple[float, float, float, float]) -> None:
-        """Alias tương thích dữ liệu cài đặt cũ; không tạo lớp phủ."""
-        self.set_crop_region(region)
-
-    def load_image(
-        self, path: Path, reveal: bool = False, category: str = ""
-    ) -> None:
+    def load_image(self, path: Path, reveal: bool = False, category: str = "") -> None:
         self.scene().clear()
         self._pixmap_item = None
         self.copy_image_button.setEnabled(False)
@@ -169,38 +157,25 @@ class QuestionImageViewer(QGraphicsView):
         self.set_question_category(category)
         self._zoom_level = 0
         try:
-            crop_key = tuple(round(value, 6) for value in self._crop_region)
-            cache_key = (
-                str(self._path.resolve()),
-                self._path.stat().st_mtime_ns,
-                crop_key,
-            )
-            pixmap = self._pixmap_cache.get(cache_key)
-            if pixmap is None:
-                with Image.open(path) as image:
-                    rgba = image.convert("RGBA")
-                    crop_bottom = self._crop_bottom(rgba.height)
-                    rgba = rgba.crop((0, 0, rgba.width, crop_bottom))
-                    self._cropped_size = rgba.size
-                    data = rgba.tobytes("raw", "RGBA")
-                    qt_image = QImage(
-                        data,
-                        rgba.width,
-                        rgba.height,
-                        rgba.width * 4,
-                        QImage.Format_RGBA8888,
-                    ).copy()
-                    pixmap = QPixmap.fromImage(qt_image)
-                self._pixmap_cache[cache_key] = pixmap
-                while len(self._pixmap_cache) > self._cache_limit:
-                    self._pixmap_cache.popitem(last=False)
-            else:
-                self._pixmap_cache.move_to_end(cache_key)
-                self._cropped_size = (pixmap.width(), pixmap.height())
-        except (OSError, ValueError) as exc:
+            mtime = self._path.stat().st_mtime_ns
+        except OSError as exc:
             raise ValueError(f"Không đọc được ảnh {path.name}: {exc}") from exc
-        if pixmap.isNull():
-            raise ValueError(f"Không đọc được ảnh {path.name}")
+        crop_key = tuple(round(value, 6) for value in self._crop_region)
+        cache_key = f"{self._path.resolve()}|{mtime}|{crop_key}"
+        pixmap = QPixmapCache.find(cache_key)
+        if pixmap is None or pixmap.isNull():
+            # Decode only the kept band straight into Qt: no PIL/bytes copies.
+            reader = QImageReader(str(self._path))
+            size = reader.size()
+            if not size.isValid() or size.width() * size.height() > self._max_pixels:
+                raise ValueError(f"Không đọc được ảnh {path.name}: kích thước không hợp lệ")
+            reader.setClipRect(QRect(0, 0, size.width(), self._crop_bottom(size.height())))
+            image = reader.read()
+            if image.isNull():
+                raise ValueError(f"Không đọc được ảnh {path.name}: {reader.errorString()}")
+            pixmap = QPixmap.fromImage(image)
+            QPixmapCache.insert(cache_key, pixmap)
+        self._cropped_size = (pixmap.width(), pixmap.height())
         self._pixmap_item = self.scene().addPixmap(pixmap)
         self.copy_image_button.setEnabled(True)
         self.scene().setSceneRect(self._pixmap_item.boundingRect())

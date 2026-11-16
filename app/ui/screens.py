@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -70,7 +71,7 @@ from app.domain.models import (
     WeakQuestionReview,
 )
 from app.repositories.answer_key import AnswerKeyReport
-from app.services.exam import ExamResult, ExamService, ExamSession
+from app.services.exam import MAX_SCORE, ExamResult, ExamService, ExamSession
 from app.services.study import CrammingService, CramState, FlashcardService, FlashState
 from app.ui.assessment_sidebar import AssessmentSidebar
 from app.ui.background import AppBackgroundCanvas, paint_app_background
@@ -218,6 +219,7 @@ class AnimatedHeaderActionButton(QPushButton):
     def _animate_hover(self, hovered: bool) -> None:
         if self._hover_animation is not None:
             self._hover_animation.stop()
+            self._hover_animation.deleteLater()
         target_size = self.HOVER_SIZE if hovered else self.BASE_SIZE
         target_background = (
             QColor(239, 65, 54, 255)
@@ -292,7 +294,6 @@ class AppHeader(QFrame):
         # Brand Button hiển thị đầy đủ icon + "SRC Learning" không bị clipped
         self.home_button = BrandButton()
         self.home_button.clicked.connect(self.home_requested)
-        self.title_label = self.home_button  # Dành cho backward compatibility trong test
 
         layout.addWidget(self.home_button, alignment=Qt.AlignVCenter)
         layout.addStretch(1)
@@ -485,7 +486,6 @@ class HomeScreen(QWidget):
 
         self.status_capsule = StatusCapsule()
         self.status_capsule.settings_clicked.connect(self.settings_requested)
-        self.notice = self.status_capsule  # Backward compatibility
 
         container_layout.addWidget(self.title_label)
         container_layout.addSpacing(10)  # Title -> Subtitle 10px
@@ -576,7 +576,7 @@ class HomeScreen(QWidget):
         self.canvas_layout.setContentsMargins(margin_h, 64, margin_h, 48)
 
         available_w = min(viewport_w - (margin_h * 2), 1680)
-        cols = max(1, min(4, (available_w + 24) // 444))
+        cols = max(1, (available_w + 24) // 444)
 
         if cols == self._current_cols and not force:
             return
@@ -1613,8 +1613,12 @@ class ExamConfigScreen(BasePage):
         categories_layout = QVBoxLayout(categories_widget)
         categories_layout.setContentsMargins(0, 0, 0, 0)
         self.category_boxes: dict[str, QCheckBox] = {}
+        self._category_counts = {
+            category: len(exam_service.eligible_questions([category]))
+            for category in CATEGORIES
+        }
         for category in CATEGORIES:
-            available = len(exam_service.eligible_questions([category]))
+            available = self._category_counts[category]
             box = QCheckBox(f"{CATEGORY_LABELS[category]} ({available} câu đủ đáp án)")
             box.setChecked(available > 0)
             box.setEnabled(available > 0)
@@ -1731,8 +1735,9 @@ class ExamConfigScreen(BasePage):
 
     def _update_pool(self, _checked: bool | None = None) -> None:
         requested = self._selected_question_count()
-        self.max_available = len(
-            self.exam_service.eligible_questions(self._selected_categories())
+        # Categories are disjoint, so the pool is the sum of cached counts.
+        self.max_available = sum(
+            self._category_counts.get(c, 0) for c in self._selected_categories()
         )
         if self.max_available > 0:
             self.count_custom.setRange(1, self.max_available)
@@ -1781,7 +1786,6 @@ class ExamScreen(BasePage):
         super().__init__()
         self.session = session
         self._crop_region = crop_region
-        self._switching = False
         self._end_monotonic = time.monotonic() + session.config.duration_minutes * 60
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -1833,7 +1837,6 @@ class ExamScreen(BasePage):
         splitter.setStretchFactor(1, 0)
         splitter.setSizes([920, 300])
         layout.addWidget(splitter, 1)
-        self._option_widgets = []
         self.previous.clicked.connect(lambda: self.go_to(self.session.current_index - 1))
         self.next.clicked.connect(lambda: self.go_to(self.session.current_index + 1))
         self.confirm.clicked.connect(self._confirm_current)
@@ -1906,10 +1909,9 @@ class ExamScreen(BasePage):
                 selected_answer=item.selected_answer,
                 read_only=item.confirmed,
             )
-        self._option_widgets = self.answer_options.option_widgets
 
     def _capture_answer(self) -> None:
-        if not self._option_widgets or self.session.current.confirmed:
+        if not self.answer_options.option_widgets or self.session.current.confirmed:
             return
         self.session.set_answer(self.answer_options.selected_answer())
         self._update_nav_item(self.session.current_index)
@@ -1955,7 +1957,7 @@ class ExamScreen(BasePage):
         self.confirm.setVisible(self.session.config.feedback_mode == FeedbackMode.IMMEDIATE)
         self.confirm.setEnabled(not item.confirmed)
         if reveal:
-            question_value = 10.0 / len(self.session.items)
+            question_value = MAX_SCORE / len(self.session.items)
             awarded = item.calculate_score(question_value)
             verdict = "Đúng" if item.is_correct else ("Đúng một phần" if awarded > 0 else "Sai")
             self.feedback.setText(
@@ -1964,9 +1966,7 @@ class ExamScreen(BasePage):
             )
         else:
             self.feedback.clear()
-        self._switching = True
         self.navigator.set_current(self.session.current_index)
-        self._switching = False
 
     def go_to(self, index: int) -> None:
         if not 0 <= index < len(self.session.items):
@@ -2030,7 +2030,13 @@ class ExamScreen(BasePage):
             return None
         self._capture_answer()
         self._timer.stop()
-        result = self.session.submit(reason)
+        try:
+            result = self.session.submit(reason)
+        except (sqlite3.Error, OSError) as exc:
+            QMessageBox.warning(
+                self, "Không lưu được bài thi", f"Chưa nộp được bài, hãy thử lại: {exc}"
+            )
+            return None
         if emit_result:
             self.result_ready.emit(result)
         return result
@@ -2077,9 +2083,9 @@ class ResultScreen(BasePage):
         top.addWidget(self.home_button)
         layout.addLayout(top)
         splitter = QSplitter()
-        self.table = QTableWidget(len(result.items) + 1, 3)
+        self.table = QTableWidget(len(result.items) + 1, 4)
         self.table.setObjectName("resultTable")
-        self.table.setHorizontalHeaderLabels(["NO", "Correct answer", "Điểm"])
+        self.table.setHorizontalHeaderLabels(["NO", "Correct answer", "Điểm", "Đã chọn"])
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -2101,6 +2107,9 @@ class ResultScreen(BasePage):
             )
             answer_cell.setTextAlignment(Qt.AlignCenter)
             points_cell.setTextAlignment(Qt.AlignCenter)
+            chosen_cell = QTableWidgetItem(item.selected_answer or "-")
+            chosen_cell.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 3, chosen_cell)
             self.table.setItem(row, 0, number_cell)
             self.table.setItem(row, 1, answer_cell)
             self.table.setItem(row, 2, points_cell)
@@ -2110,6 +2119,7 @@ class ResultScreen(BasePage):
             QTableWidgetItem("Total"),
             QTableWidgetItem(result.status),
             QTableWidgetItem(f"{result.score:.2f} / 10"),
+            QTableWidgetItem(""),
         ]
         status_color = QColor("#30D158" if result.passed else "#FF453A")
         total_cells[1].setForeground(status_color)
@@ -2320,9 +2330,12 @@ class SettingsScreen(BasePage):
 
     def _update_preview_crop(self) -> None:
         if self.preview is not None:
-            self.preview.set_crop_region(
-                tuple(spin.value() / 100.0 for spin in self.crop_values)
-            )
+            try:
+                self.preview.set_crop_region(
+                    tuple(spin.value() / 100.0 for spin in self.crop_values)
+                )
+            except ValueError:
+                pass  # ảnh xem trước hỏng: giữ nguyên, không làm tắt app
 
     def _save(self) -> None:
         values = [spin.value() / 100.0 for spin in self.crop_values]

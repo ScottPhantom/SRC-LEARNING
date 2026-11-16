@@ -27,10 +27,6 @@ class ExamBankAllocator:
     def __init__(self, rng: random.Random | None = None):
         self.rng = rng or random.SystemRandom()
 
-    @staticmethod
-    def _dominant_category(category_counts: Mapping[str, int]) -> str:
-        return min(category_counts, key=lambda name: (-category_counts[name], name))
-
     @classmethod
     def allocation_plan_from_counts(
         cls, category_counts: Mapping[str, int], amount: int
@@ -52,7 +48,7 @@ class ExamBankAllocator:
         if amount > total:
             raise ValueError(f"Chỉ có {total} câu trong ngân hàng đề.")
 
-        dominant = cls._dominant_category(counts)
+        dominant = min(counts, key=lambda name: (-counts[name], name))
         raw = {name: amount * count / total for name, count in counts.items()}
         quotas = {name: min(counts[name], math.floor(raw[name])) for name in counts}
         lower_bound = 1 if amount >= len(counts) else 0
@@ -191,7 +187,6 @@ class ExamBankAllocator:
             ],
             review_amount,
         )
-        selected_ids = {question.id for question in selected}
         error_ids = {question.id for question in error_candidates}
         random_pool = [
             question for question in questions if question.id not in error_ids

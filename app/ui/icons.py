@@ -14,6 +14,9 @@ from PyQt5.QtGui import (
 )
 
 
+_ICON_TYPES = {"history", "add", "refresh", "settings", "arrow_right", "logo"}
+
+
 def create_line_icon(
     icon_type: str,
     size: int = 24,
@@ -21,6 +24,8 @@ def create_line_icon(
     stroke_width: float = 2.0,
 ) -> QIcon:
     """Tạo QIcon dạng nét vẽ (line icon) sắc nét ở mọi độ phân giải (High-DPI)."""
+    if icon_type not in _ICON_TYPES:
+        raise ValueError(f"Icon không hợp lệ: {icon_type}")
     color = QColor("#F5F5F7") if color is None else color
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.setDevicePixelRatio(2.0)

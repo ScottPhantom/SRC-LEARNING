@@ -13,7 +13,7 @@ except ImportError:  # Dependency mới chưa được cài trong môi trường
     _darkdetect = None
 
 LIGHT_STYLE = """
-QWidget { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; }
+QWidget { font-family: "Segoe UI", Roboto, "Noto Sans", "DejaVu Sans", sans-serif; font-size: 14px; }
 QMainWindow { background: #EEF3FA; color: #1d1d1f; }
 QWidget#page, QWidget#homePage { background: transparent; color: #1d1d1f; }
 QWidget#appShell { background: #EEF3FA; }
@@ -343,20 +343,11 @@ QLabel#subtitle { color: #64748b; }
 """
 
 DARK_STYLE = """
-QWidget { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; }
+QWidget { font-family: "Segoe UI", Roboto, "Noto Sans", "DejaVu Sans", sans-serif; font-size: 14px; }
 QMainWindow { background: #0E0F12; color: #F5F5F7; }
 QWidget#page, QWidget#homePage { background: transparent; color: #F5F5F7; }
 QWidget#appShell { background: #0E0F12; }
 QFrame#globalHeader {
-  background: rgba(18, 20, 26, 210);
-  border: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  border-top-left-radius: 0px;
-  border-top-right-radius: 0px;
-  border-bottom-left-radius: 18px;
-  border-bottom-right-radius: 18px;
-}
-QFrame#globalHeader[homeMode="true"] {
   background: rgba(18, 20, 26, 210);
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -375,11 +366,6 @@ QLabel#globalAppTitle {
 }
 QFrame#headerActionCapsule {
   background: rgba(28, 30, 38, 190); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 18px;
-}
-QFrame#headerActionCapsule[homeMode="true"] {
-  background: rgba(28, 30, 38, 190);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 18px;
 }
 QPushButton#headerActionButton {
   background: transparent; border: 0; border-radius: 14px;
@@ -686,7 +672,11 @@ def _fallback_system_theme() -> str | None:
                 timeout=1,
                 check=False,
             )
-            return "Dark" if result.returncode == 0 and "dark" in result.stdout.casefold() else "Light"
+            return (
+                "Dark"
+                if result.returncode == 0 and "dark" in result.stdout.casefold()
+                else "Light"
+            )
         if system == "Windows":
             import winreg
 
@@ -722,7 +712,7 @@ def detect_system_theme() -> str | None:
             detected = _darkdetect.theme()
             if detected:
                 return str(detected)
-        except (OSError, RuntimeError):
+        except Exception:  # third-party lib; never fail startup
             pass
     return _fallback_system_theme()
 
@@ -752,7 +742,9 @@ class ThemeManager:
 
     def apply(self, selected_theme: str) -> str:
         self.selected_theme = (
-            selected_theme if selected_theme in {"system", "light", "dark"} else "system"
+            selected_theme
+            if selected_theme in {"system", "light", "dark"}
+            else "system"
         )
         resolved = self.resolve(self.selected_theme)
         self.applied_theme = resolved
@@ -775,8 +767,3 @@ class ThemeManager:
             self.application.setPalette(self.application.style().standardPalette())
             self.application.setStyleSheet(LIGHT_STYLE)
         return resolved
-
-
-def apply_theme(application: QApplication, theme: str) -> str:
-    """API tương thích; code điều phối chính nên giữ một ThemeManager dùng chung."""
-    return ThemeManager(application).apply(theme)

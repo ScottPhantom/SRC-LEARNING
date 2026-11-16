@@ -97,10 +97,6 @@ class QuestionNavigationGrid(QWidget):
     def state(self, index: int) -> str:
         return self._states[index]
 
-    def item(self, index: int) -> QPushButton:
-        """Compatibility helper cho code/test từng truy cập ``navigator.item``."""
-        return self.buttons[index]
-
 
 class AssessmentSidebar(QFrame):
     """Sidebar dùng chung: đáp án, điều hướng câu hỏi và vùng action."""

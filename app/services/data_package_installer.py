@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import stat
@@ -15,14 +16,16 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path, PurePosixPath
 
-import gdown
-from tqdm import tqdm
-
 from app.config import CATEGORIES, IMAGE_EXTENSIONS
 from app.repositories.answer_key import AnswerKeyRepository
 from app.services.data_scanner import DataScannerService
-from app.services.subject_management import SubjectManagementError, SubjectManager
+from app.services.subject_management import (
+    SubjectManagementError,
+    SubjectManager,
+    touch_recovery,
+)
 
+LOGGER = logging.getLogger(__name__)
 ProgressCallback = Callable[[str, int, str], None]
 DownloadFunction = Callable[[str, Path, int, ProgressCallback], Path]
 
@@ -44,6 +47,10 @@ class UnknownPackageCodeError(DataPackageError):
 
 
 class ExistingSubjectError(DataPackageError):
+    pass
+
+
+class DataInstallCancelled(DataPackageError):
     pass
 
 
@@ -96,43 +103,58 @@ class DataPackageCatalog:
             decoded = content.decode("utf-8-sig")
             reader = csv.DictReader(io.StringIO(decoded))
             required = {
-                "Môn", "Google file ID", "Số câu", "SHA-256 ZIP",
-                "Kích thước (byte)", "App manifest",
+                "Môn",
+                "Google file ID",
+                "Số câu",
+                "SHA-256 ZIP",
+                "Kích thước (byte)",
+                "App manifest",
             }
             if not required.issubset(reader.fieldnames or []):
                 raise ValueError("Thiếu cột danh mục bắt buộc")
             packages: list[DataPackageSpec] = []
             subjects: set[str] = set()
             ids: set[str] = set()
-            for row in reader:
+            errors: list[str] = []
+            for line, row in enumerate(reader, start=2):
                 if (row.get("App manifest") or "").strip() != "Đã bật":
                     continue
-                subject = (row["Môn"] or "").strip()
-                file_id = (row["Google file ID"] or "").strip()
-                digest = (row["SHA-256 ZIP"] or "").strip().lower()
-                size = int((row["Kích thước (byte)"] or "").strip())
-                question_count = int((row["Số câu"] or "").strip())
-                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", subject):
-                    raise ValueError(f"Mã môn không hợp lệ: {subject}")
-                if not DRIVE_ID_PATTERN.fullmatch(file_id):
-                    raise ValueError(f"Google file ID không hợp lệ: {subject}")
-                if not re.fullmatch(r"[0-9a-f]{64}", digest):
-                    raise ValueError(f"SHA-256 không hợp lệ: {subject}")
-                if not 0 < size <= MAX_UNCOMPRESSED_BYTES or question_count <= 0:
-                    raise ValueError(f"Kích thước hoặc số câu không hợp lệ: {subject}")
-                if subject in subjects or file_id in ids:
-                    raise ValueError("Danh mục có mã môn hoặc Google file ID trùng lặp")
-                subjects.add(subject)
-                ids.add(file_id)
-                packages.append(
-                    DataPackageSpec(
-                        subject, file_id, digest, size,
-                        expected_questions=question_count,
-                    )
-                )
+                try:
+                    package = cls._parse_sheet_row(row)
+                    if package.subject in subjects or package.file_id in ids:
+                        raise ValueError("Danh mục có mã môn hoặc Google file ID trùng lặp")
+                except (TypeError, ValueError) as exc:
+                    # One bad row must not hide every other approved subject.
+                    LOGGER.warning("Bỏ qua dòng %d của danh mục: %s", line, exc)
+                    errors.append(str(exc))
+                    continue
+                subjects.add(package.subject)
+                ids.add(package.file_id)
+                packages.append(package)
+            if errors and not packages:
+                raise ValueError("; ".join(errors))
         except (UnicodeError, csv.Error, TypeError, ValueError) as exc:
             raise DataPackageError(f"Danh mục môn học không hợp lệ: {exc}") from exc
         return cls(packages)
+
+    @staticmethod
+    def _parse_sheet_row(row: Mapping[str, str | None]) -> DataPackageSpec:
+        subject = (row["Môn"] or "").strip()
+        file_id = (row["Google file ID"] or "").strip()
+        digest = (row["SHA-256 ZIP"] or "").strip().lower()
+        size = int((row["Kích thước (byte)"] or "").strip())
+        question_count = int((row["Số câu"] or "").strip())
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", subject):
+            raise ValueError(f"Mã môn không hợp lệ: {subject}")
+        if not DRIVE_ID_PATTERN.fullmatch(file_id):
+            raise ValueError(f"Google file ID không hợp lệ: {subject}")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError(f"SHA-256 không hợp lệ: {subject}")
+        if not 0 < size <= MAX_UNCOMPRESSED_BYTES or question_count <= 0:
+            raise ValueError(f"Kích thước hoặc số câu không hợp lệ: {subject}")
+        return DataPackageSpec(
+            subject, file_id, digest, size, expected_questions=question_count
+        )
 
     @staticmethod
     def extract_file_id(code: str) -> str:
@@ -173,8 +195,16 @@ class DataPackageInstaller:
         *,
         replace_existing: bool = False,
         progress: ProgressCallback | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> DataInstallResult:
         report = progress or (lambda _stage, _percent, _message: None)
+
+        # ponytail: checked between stages only; gdown cannot be interrupted
+        # mid-download, so a cancel takes effect once the download returns.
+        def check_cancelled() -> None:
+            if cancelled is not None and cancelled():
+                raise DataInstallCancelled("Đã hủy cài đặt môn học.")
+
         package = self.catalog.resolve(code)
         data_dir = Path(data_dir).expanduser().resolve()
         try:
@@ -191,8 +221,9 @@ class DataPackageInstaller:
                 f"Môn {package.subject} đã tồn tại. Hãy xác nhận trước khi thay thế."
             )
 
+        # Inside DATA so os.replace stays on one filesystem; scanners skip dot dirs.
         with tempfile.TemporaryDirectory(
-            prefix=".src-learning-import-", dir=data_dir.parent
+            prefix=".src-learning-import-", dir=data_dir
         ) as temp_name:
             temp_root = Path(temp_name)
             archive_path = temp_root / f"{package.subject}.zip"
@@ -200,6 +231,7 @@ class DataPackageInstaller:
             downloaded = self.download_file(
                 package.file_id, archive_path, package.archive_size, report
             )
+            check_cancelled()
             if not downloaded.is_file():
                 raise DataPackageError("Google Drive không trả về tệp dữ liệu hợp lệ.")
             if downloaded.stat().st_size != package.archive_size:
@@ -213,16 +245,22 @@ class DataPackageInstaller:
                     "SHA-256 không khớp. Tệp tải xuống có thể bị lỗi hoặc không đúng phiên bản."
                 )
 
+            check_cancelled()
             extract_root = temp_root / "extracted"
             self._safe_extract(downloaded, extract_root, report)
+            check_cancelled()
             source, question_count = self._validate_subject(
                 extract_root, package.subject, report
             )
-            if package.expected_questions is not None and question_count != package.expected_questions:
+            if (
+                package.expected_questions is not None
+                and question_count != package.expected_questions
+            ):
                 raise DataPackageError(
                     f"Số câu của gói {package.subject} không khớp danh mục "
                     f"({question_count}/{package.expected_questions})."
                 )
+            check_cancelled()
             report("install", 0, "Đang chuyển dữ liệu đã xác minh vào DATA…")
             backup_path = self._atomic_install(source, destination, replace_existing)
             report("complete", 100, f"Đã cài đặt {package.subject} thành công.")
@@ -241,29 +279,19 @@ class DataPackageInstaller:
         expected_size: int,
         progress: ProgressCallback,
     ) -> Path:
+        import gdown  # lazy: pulls in requests/bs4 (~16 MB) only when downloading
+
         stop_monitor = threading.Event()
 
         def monitor() -> None:
-            current = 0
-            with tqdm(
-                total=expected_size,
-                desc="Tải dữ liệu",
-                unit="B",
-                unit_scale=True,
-                disable=True,
-            ) as bar:
-                while not stop_monitor.wait(0.1):
-                    candidates = [output, *output.parent.glob(f"{output.name}*.part")]
-                    observed = max(
-                        (path.stat().st_size for path in candidates if path.is_file()),
-                        default=0,
-                    )
-                    delta = max(0, observed - current)
-                    if delta:
-                        bar.update(delta)
-                        current = observed
-                    percent = min(99, int(observed * 100 / max(1, expected_size)))
-                    progress("download", percent, "Đang tải dữ liệu từ Google Drive…")
+            while not stop_monitor.wait(0.1):
+                candidates = [output, *output.parent.glob(f"{output.name}*.part")]
+                observed = max(
+                    (path.stat().st_size for path in candidates if path.is_file()),
+                    default=0,
+                )
+                percent = min(99, int(observed * 100 / max(1, expected_size)))
+                progress("download", percent, "Đang tải dữ liệu từ Google Drive…")
 
         monitor_thread = threading.Thread(target=monitor, daemon=True)
         monitor_thread.start()
@@ -294,17 +322,10 @@ class DataPackageInstaller:
         digest = hashlib.sha256()
         total = path.stat().st_size
         processed = 0
-        with path.open("rb") as handle, tqdm(
-            total=total,
-            desc="Kiểm tra SHA-256",
-            unit="B",
-            unit_scale=True,
-            disable=True,
-        ) as bar:
+        with path.open("rb") as handle:
             while chunk := handle.read(1024 * 1024):
                 digest.update(chunk)
                 processed += len(chunk)
-                bar.update(len(chunk))
                 progress(
                     "verify",
                     min(100, int(processed * 100 / max(1, total))),
@@ -330,30 +351,22 @@ class DataPackageInstaller:
                 raise DataPackageError("ZIP vượt quá giới hạn giải nén an toàn.")
             extract_root.mkdir(parents=True, exist_ok=True)
             processed = 0
-            with tqdm(
-                total=total,
-                desc="Giải nén dữ liệu",
-                unit="B",
-                unit_scale=True,
-                disable=True,
-            ) as bar:
-                for member in members:
-                    relative = cls._safe_member_path(member)
-                    target = extract_root.joinpath(*relative.parts)
-                    if member.is_dir():
-                        target.mkdir(parents=True, exist_ok=True)
-                        continue
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(member) as source, target.open("wb") as output:
-                        while chunk := source.read(1024 * 1024):
-                            output.write(chunk)
-                            processed += len(chunk)
-                            bar.update(len(chunk))
-                            progress(
-                                "extract",
-                                min(100, int(processed * 100 / max(1, total))),
-                                f"Đang giải nén {member.filename}…",
-                            )
+            for member in members:
+                relative = cls._safe_member_path(member)
+                target = extract_root.joinpath(*relative.parts)
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("wb") as output:
+                    while chunk := source.read(1024 * 1024):
+                        output.write(chunk)
+                        processed += len(chunk)
+                        progress(
+                            "extract",
+                            min(100, int(processed * 100 / max(1, total))),
+                            f"Đang giải nén {member.filename}…",
+                        )
 
     @staticmethod
     def _safe_member_path(member: zipfile.ZipInfo) -> PurePosixPath:
@@ -399,7 +412,9 @@ class DataPackageInstaller:
 
         progress("validate", 15, "Đang quét và kiểm tra dữ liệu môn học…")
         subjects = DataScannerService(subject_path.parent).scan()
-        subject = next((item for item in subjects if item.name == expected_subject), None)
+        subject = next(
+            (item for item in subjects if item.name == expected_subject), None
+        )
         if subject is None or not subject.questions:
             raise DataPackageError("Không quét được câu hỏi từ gói môn học.")
         if subject.invalid_images:
@@ -435,12 +450,17 @@ class DataPackageInstaller:
                 f"Môn {destination.name} đã tồn tại. Hãy xác nhận trước khi thay thế."
             )
         try:
-            backup = manager.reserve_recovery_path(destination.name) if had_existing else None
+            backup = (
+                manager.reserve_recovery_path(destination.name)
+                if had_existing
+                else None
+            )
         except SubjectManagementError as exc:
             raise DataPackageError(str(exc)) from exc
         try:
             if backup is not None:
                 os.replace(destination, backup)
+                touch_recovery(backup)
             os.replace(source, destination)
         except OSError as exc:
             if backup is not None and backup.exists():
@@ -455,14 +475,3 @@ class DataPackageInstaller:
                     ) from exc
             raise DataPackageError(f"Không thể cài đặt môn học: {exc}") from exc
         return backup
-
-
-def package_from_mapping(item: Mapping[str, object]) -> DataPackageSpec:
-    """Small public helper used by focused tests and future catalog providers."""
-    return DataPackageSpec(
-        subject=str(item["subject"]),
-        file_id=str(item["file_id"]),
-        sha256=str(item["sha256"]),
-        archive_size=int(item["archive_size"]),
-        enabled=bool(item.get("enabled", True)),
-    )

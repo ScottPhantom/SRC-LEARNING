@@ -111,6 +111,7 @@ class SubjectManagementPanel(QWidget):
             self._operation_message
             or (f"{len(subjects)} môn học trong DATA." if subjects else "Chưa có môn học trong DATA.")
         )
+        self._operation_message = None  # show once; next refresh restores the count
 
     def show_operation_message(self, message: str) -> None:
         self._operation_message = message

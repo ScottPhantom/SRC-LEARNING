@@ -3,17 +3,39 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.services.data_package_installer import DataPackageCatalog, DataPackageError
 
 LOGGER = logging.getLogger(__name__)
 MAX_CATALOG_BYTES = 1024 * 1024
+FETCH_ATTEMPTS = 3
 FetchCatalog = Callable[[str], bytes]
+
+
+def _is_google_host(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    return parsed.scheme == "https" and (
+        host == "docs.google.com" or host.endswith(".googleusercontent.com")
+    )
+
+
+class _GoogleOnlyRedirect(HTTPRedirectHandler):
+    """Published Sheets redirect to googleusercontent.com; block anything else."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_google_host(newurl):
+            raise DataPackageError("Danh mục bị chuyển hướng tới máy chủ không được phép.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = build_opener(_GoogleOnlyRedirect)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +66,6 @@ class PackageCatalogSource:
             parsed.scheme != "https"
             or parsed.hostname != "docs.google.com"
             or not parsed.path.startswith("/spreadsheets/d/")
-            or query.get("gid") != ["105"]
             or not (
                 query.get("output") == ["csv"]
                 or query.get("format") == ["csv"]
@@ -55,8 +76,15 @@ class PackageCatalogSource:
     @staticmethod
     def _fetch(url: str) -> bytes:
         request = Request(url, headers={"User-Agent": "SRC-LEARNING/1.0"})
-        with urlopen(request, timeout=8) as response:
-            content = response.read(MAX_CATALOG_BYTES + 1)
+        for attempt in range(FETCH_ATTEMPTS):
+            try:
+                with _OPENER.open(request, timeout=8) as response:
+                    content = response.read(MAX_CATALOG_BYTES + 1)
+                break
+            except OSError:
+                if attempt == FETCH_ATTEMPTS - 1:
+                    raise
+                time.sleep(2**attempt)
         if len(content) > MAX_CATALOG_BYTES:
             raise DataPackageError("Danh mục môn học vượt quá giới hạn 1 MB.")
         return content
@@ -87,8 +115,6 @@ class PackageCatalogSource:
             try:
                 self._validate_url(self.source_url)
                 content = self.fetch(self.source_url)
-                if len(content) > MAX_CATALOG_BYTES:
-                    raise DataPackageError("Danh mục môn học vượt quá giới hạn 1 MB.")
                 catalog = DataPackageCatalog.from_sheet_csv(content)
                 try:
                     self._store(content)

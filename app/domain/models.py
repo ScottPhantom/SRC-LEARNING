@@ -52,10 +52,6 @@ class Subject:
             counts[question.category] = counts.get(question.category, 0) + 1
         return counts
 
-    def questions_in(self, categories: Iterable[str]) -> list[Question]:
-        selected = set(categories)
-        return [q for q in self.questions if q.category in selected]
-
 
 @dataclass(slots=True)
 class AppSettings:
@@ -69,11 +65,6 @@ class AppSettings:
     @property
     def crop_region(self) -> tuple[float, float, float, float]:
         return (self.mask_x, self.mask_y, self.mask_width, self.mask_height)
-
-    @property
-    def mask_region(self) -> tuple[float, float, float, float]:
-        """Tên tương thích cho dữ liệu SQLite từ các phiên bản trước."""
-        return self.crop_region
 
 
 @dataclass(slots=True, frozen=True)
@@ -129,26 +120,43 @@ class ExamQuestion:
 
     @property
     def is_correct(self) -> bool:
-        return normalize_answer(self.selected_answer) == normalize_answer(
-            self.question.correct_answer
-        )
+        return score_answer(
+            self.selected_answer,
+            self.question.correct_answer,
+            self.question.is_multiple,
+            1.0,
+        )[0]
 
     def calculate_score(self, question_value: float) -> float:
         """Calculate raw points using exact or partial-credit grading."""
-        selected = set(normalize_answer(self.selected_answer))
-        correct = set(normalize_answer(self.question.correct_answer))
-        if not selected or not correct:
-            return 0.0
-        if not self.question.is_multiple:
-            return question_value if selected == correct else 0.0
-        correct_selected = len(selected & correct)
-        wrong_selected = len(selected - correct)
-        score = (correct_selected - wrong_selected) * (question_value / len(correct))
-        return max(0.0, min(question_value, score))
+        return score_answer(
+            self.selected_answer,
+            self.question.correct_answer,
+            self.question.is_multiple,
+            question_value,
+        )[1]
+
+
+def score_answer(
+    selected_answer: str, correct_answer: str, is_multiple: bool, value: float
+) -> tuple[bool, float]:
+    """Return (exact match, points); multiple-choice gets partial credit."""
+    selected = set(normalize_answer(selected_answer))
+    correct = set(normalize_answer(correct_answer))
+    exact = bool(correct) and selected == correct
+    if not selected or not correct:
+        return exact, 0.0
+    if not is_multiple:
+        return exact, value if exact else 0.0
+    raw = (len(selected & correct) - len(selected - correct)) * (value / len(correct))
+    return exact, max(0.0, min(value, raw))
 
 
 def normalize_answer(value: str) -> str:
     """Return unique A-H characters in canonical order."""
     valid_options = "ABCDEFGH"
-    chars = {char for char in (value or "").upper() if char in valid_options}
+    text = (value or "").upper()
+    if any(c.isalpha() and c not in valid_options for c in text):
+        return ""  # words like "Because" are not answers
+    chars = set(text)
     return "".join(char for char in valid_options if char in chars)
