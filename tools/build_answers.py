@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 from collections import Counter
 from collections.abc import Callable
@@ -16,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import cv2
 import pytesseract
 
-from app.config import MULTIPLE_CATEGORY
+from app.config import DEFAULT_MASK_REGION, MULTIPLE_CATEGORY
 from app.domain.models import normalize_answer
 from app.repositories.answer_key import (
     AnswerKeyRepository,
@@ -56,13 +57,13 @@ def read_existing(path: Path) -> dict[str, str]:
     result: dict[str, str] = {}
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
+            for row in csv.DictReader(handle):
                 relative = normalize_relative_path(row.get("image_name", ""))
                 if relative:
                     result[relative] = normalize_answer(row.get("correct_answer", ""))
     except (OSError, csv.Error, UnicodeError) as exc:
-        print(f"WARNING: Không đọc được {path}: {exc}", file=sys.stderr)
+        # Abort: an empty result would make OCR redo and overwrite manual answers.
+        raise SystemExit(f"Không đọc được {path}: {exc}") from exc
     return result
 
 
@@ -72,6 +73,8 @@ def write_csv(path: Path, rows: list[tuple[str, str]]) -> None:
         writer = csv.writer(handle)
         writer.writerow(["image_name", "correct_answer"])
         writer.writerows(rows)
+        handle.flush()
+        os.fsync(handle.fileno())
     temporary.replace(path)
 
 
@@ -244,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--region",
         type=parse_region,
-        default=(0.0, 0.90, 0.25, 0.10),
+        default=DEFAULT_MASK_REGION,
         help="Vùng crop tương đối x,y,width,height (mặc định 0,0.90,0.25,0.10)",
     )
     parser.add_argument(

@@ -86,7 +86,7 @@ def main() -> int:
         checker = QuestionBankUpdateChecker(
             database, DEFAULT_MASK_REGION, answer_resolver=resolver
         )
-        results = checker.check(subjects, apply=args.apply)
+        results = [checker.check_subject(s, apply=args.apply) for s in subjects]
     finally:
         database.close()
 

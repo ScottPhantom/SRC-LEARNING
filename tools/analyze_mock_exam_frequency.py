@@ -4,14 +4,20 @@ import argparse
 import csv
 import math
 import sqlite3
+import sys
 from collections import Counter, defaultdict
+from contextlib import closing
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DATABASE_PATH = PROJECT_ROOT / "study_progress.sqlite3"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.config import DEFAULT_DB_PATH as DEFAULT_DATABASE_PATH  # noqa: E402
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "docs"
 
 CATEGORY_COLORS = {
@@ -34,6 +40,7 @@ CATEGORY_LABELS = {
 }
 
 
+@lru_cache(maxsize=None)
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
         Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf")
@@ -42,6 +49,9 @@ def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.Im
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
         if bold
         else Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf")
+        if bold
+        else Path("/usr/share/fonts/TTF/DejaVuSans.ttf"),
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -70,11 +80,13 @@ def load_rows(connection: sqlite3.Connection, subject: str) -> list[dict[str, ob
         COALESCE(qes.wrong_count, 0) wrong_count
         FROM questions q
         LEFT JOIN exam_answers ea ON ea.question_id=q.id
+        AND ea.attempt_id IN (SELECT id FROM exam_attempts
+            WHERE subject=q.subject AND (?1=0 OR graded_bank_version=?1))
         LEFT JOIN question_error_stats qes ON qes.question_id=q.id
-        WHERE q.active=1 AND q.subject=? {revision_filter}
+        WHERE q.active=1 AND q.subject=?2 {revision_filter}
         GROUP BY q.id
         ORDER BY appearances DESC, q.category, q.relative_path""",
-        (subject,),
+        (bank_version, subject),
     ).fetchall()
     result: list[dict[str, object]] = []
     for row in rows:
@@ -441,7 +453,7 @@ def reserve_output_paths(
 
 def main() -> None:
     args = parse_args()
-    with open_database(args.database) as connection:
+    with closing(open_database(args.database)) as connection:
         generated_at = datetime.now().astimezone()
         subjects = [
             str(row[0])
@@ -454,6 +466,8 @@ def main() -> None:
         for subject in subjects:
             rows = load_rows(connection, subject)
             if not rows:
+                if args.subject:
+                    raise SystemExit(f"Không có câu hỏi cho môn: {subject}")
                 continue
             bank_version = int(rows[0].get("bank_version", 0))
             if bank_version:
