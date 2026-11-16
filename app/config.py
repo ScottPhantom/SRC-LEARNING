@@ -10,10 +10,12 @@ APP_DIR = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent.parent
 )
+# Source runs keep DB, log and catalog cache together in user_data/ (git-ignored)
+# instead of scattering them across the repo root.
 STATE_DIR = (
     Path.home() / ".luyen_thi_hinh_anh"
     if getattr(sys, "frozen", False)
-    else APP_DIR
+    else APP_DIR / "user_data"
 )
 DEFAULT_DATA_DIR = (
     STATE_DIR / "DATA" if getattr(sys, "frozen", False) else APP_DIR / "DATA"
