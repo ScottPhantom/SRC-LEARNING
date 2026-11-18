@@ -32,6 +32,14 @@
       "archive_size": 37225755,
       "expected_questions": 456,
       "enabled": true
+    },
+    {
+      "subject": "SSG105t",
+      "file_id": "1gAc0R1Jcl4wfxeUlEDPWP6AWh5Fi90v8",
+      "sha256": "08e80110cab86e3089e8c7569e1bdf0bc1147796aead40035dcf2cee8f045e46",
+      "archive_size": 35598771,
+      "expected_questions": 369,
+      "enabled": true
     }
   ]
 }

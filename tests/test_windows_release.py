@@ -20,7 +20,9 @@ def release_inputs(tmp_path, monkeypatch):
     qa = tmp_path / "qa"
     qa.mkdir()
     cpv = {"subject": "CPV301", "file_id": "approved-cpv-code"}
-    catalog = {"CPV301": cpv}
+    reference_path = windows_release.Path(windows_release.__file__).parent / "fixtures/ssg105t_v1_reference.json"
+    reference = json.loads(reference_path.read_text())
+    catalog = {"CPV301": cpv, **reference["approved_packages"]}
     monkeypatch.setattr(windows_release, "embedded_catalog", lambda _exe: catalog)
     monkeypatch.setenv("GITHUB_SHA", "test-commit")
     (qa / "metadata.json").write_text(json.dumps({"cpv": cpv, "catalog": catalog}))
@@ -41,6 +43,22 @@ def release_inputs(tmp_path, monkeypatch):
         } for theme in ("light", "dark")],
     }
     (qa / "flashcard-windows-gui-report.json").write_text(json.dumps(flash))
+    for mode in ("qt", "windows"):
+        report = {
+            "status": "PASS", "mode": mode, "platform": "win32", "commit": "test-commit",
+            "executable_sha256": windows_release.sha256(executable),
+            "packages": reference["approved_packages"], "reference_sha256": windows_release.sha256(reference_path),
+            "cases": [{
+                "scenario": scenario, "status": "PASS", "bank_version": 2 if scenario == "upgrade" else 1,
+                "question_count": 158 if scenario == "cancel-active" else 369,
+                "progress_and_history_preserved": True, "old_ssg105_unchanged": True,
+                "ail_sessions_preserved": True, "original_158_preserved": True, "sqlite_integrity_ok": True,
+                "repeat_import_no_extra_version": scenario != "cancel-active",
+                "active_target_cancel_preserved": scenario == "cancel-active",
+                "clean_exit": True, "reopen_preserved": True, "physical_mouse_gui": True,
+            } for scenario in ("fresh", "upgrade", "cancel-active")],
+        }
+        (qa / f"ssg105t-{mode}-gui-report.json").write_text(json.dumps(report))
     return executable, qa, tmp_path / "release.zip"
 
 
@@ -113,5 +131,32 @@ def test_package_requires_matching_native_flashcard_evidence(release_inputs, fau
         report[field] = "incorrect-evidence"
     path.write_text(json.dumps(report))
     with pytest.raises(ValueError, match="Flashcard"):
+        windows_release.package(executable, qa, archive)
+    assert not archive.exists()
+
+
+@pytest.mark.parametrize("mode", ["qt", "windows"])
+@pytest.mark.parametrize("fault", ["missing_case", "progress", "old_ssg105", "cancel", "repeat", "count", "version", "commit", "reference", "package", "hash", "reopen"])
+def test_package_requires_fresh_and_upgrade_ssg105t_gui_evidence(release_inputs, mode, fault):
+    if mode == "qt" and fault in {"hash", "reopen"}:
+        pytest.skip("Native EXE-only evidence")
+    executable, qa, archive = release_inputs
+    path = qa / f"ssg105t-{mode}-gui-report.json"
+    report = json.loads(path.read_text())
+    if fault == "missing_case":
+        report["cases"].pop()
+    elif fault in {"progress", "old_ssg105", "repeat", "reopen"}:
+        field = {"progress": "progress_and_history_preserved", "old_ssg105": "old_ssg105_unchanged", "repeat": "repeat_import_no_extra_version", "reopen": "reopen_preserved"}[fault]
+        report["cases"][0][field] = False
+    elif fault == "cancel":
+        report["cases"][2]["active_target_cancel_preserved"] = False
+    elif fault in {"count", "version"}:
+        report["cases"][1]["question_count" if fault == "count" else "bank_version"] = 999
+    elif fault == "package":
+        report["packages"]["SSG105t"]["sha256"] = "wrong"
+    else:
+        report[{"commit": "commit", "reference": "reference_sha256", "hash": "executable_sha256"}[fault]] = "wrong"
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="SSG105t"):
         windows_release.package(executable, qa, archive)
     assert not archive.exists()

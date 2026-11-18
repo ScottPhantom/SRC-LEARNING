@@ -40,6 +40,41 @@ def verify_pe_x64(executable: Path) -> None:
             raise ValueError("The release executable is not Windows x64")
 
 
+def verify_ssg105t_gui(qa: Path, catalog: dict, commit: str, executable_digest: str) -> dict:
+    reference_path = Path(__file__).parent / "fixtures/ssg105t_v1_reference.json"
+    reference = json.loads(reference_path.read_text(encoding="utf-8"))
+    expected = reference["approved_packages"]
+    if any(catalog.get(subject) != package for subject, package in expected.items()):
+        raise ValueError("SSG105t catalog differs from the approved DSS packages")
+    reports = {}
+    for mode in ("qt", "windows"):
+        report = json.loads((qa / f"ssg105t-{mode}-gui-report.json").read_text(encoding="utf-8"))
+        cases = report.get("cases", [])
+        if (
+            report.get("status") != "PASS" or report.get("mode") != mode
+            or report.get("commit") != commit or report.get("packages") != expected
+            or report.get("reference_sha256") != sha256(reference_path)
+            or len(cases) != 3 or {case.get("scenario") for case in cases} != {"fresh", "upgrade", "cancel-active"}
+        ):
+            raise ValueError("Incomplete or stale SSG105t GUI release gate")
+        if mode == "windows" and (report.get("platform") != "win32" or report.get("executable_sha256") != executable_digest):
+            raise ValueError("SSG105t native evidence belongs to a different Windows EXE")
+        for case in cases:
+            cancelled = case["scenario"] == "cancel-active"
+            required = ["progress_and_history_preserved", "old_ssg105_unchanged", "ail_sessions_preserved", "original_158_preserved", "sqlite_integrity_ok"]
+            required.append("active_target_cancel_preserved" if cancelled else "repeat_import_no_extra_version")
+            if mode == "windows":
+                required.extend(("clean_exit", "reopen_preserved", "physical_mouse_gui"))
+            if (
+                case.get("status") != "PASS" or any(case.get(field) is not True for field in required)
+                or case.get("bank_version") != (2 if case["scenario"] == "upgrade" else 1)
+                or case.get("question_count") != (158 if cancelled else 369)
+            ):
+                raise ValueError("SSG105t GUI did not preserve progress, history, sessions or old SSG105")
+        reports[mode] = report
+    return reports
+
+
 def package(executable: Path, qa: Path, archive: Path) -> dict:
     verify_pe_x64(executable)
     if archive.exists():
@@ -79,6 +114,7 @@ def package(executable: Path, qa: Path, archive: Path) -> dict:
     actual = embedded_catalog(executable)
     if actual != metadata["catalog"]:
         raise ValueError("Embedded EXE catalog differs from the verified DSS metadata")
+    ssg_reports = verify_ssg105t_gui(qa, actual, windows_report["commit"], executable_digest)
 
     report = {
         "commit": os.environ.get("GITHUB_SHA"), "architecture": "Windows x64",
@@ -86,6 +122,9 @@ def package(executable: Path, qa: Path, archive: Path) -> dict:
         "catalog": actual, "qt_gui_cases": qt_report["cases"],
         "native_exe_gui_cases": windows_report["cases"],
         "native_flashcard_gui_cases": flash_report["cases"],
+        "source_ssg105t_gui_cases": ssg_reports["qt"]["cases"],
+        "native_ssg105t_gui_cases": ssg_reports["windows"]["cases"],
+        "ssg105t_reference_sha256": ssg_reports["windows"]["reference_sha256"],
         "data_included": False, "authenticode_signed": False,
     }
     codes = "\n".join(f"- {name}: {item['file_id']}" for name, item in sorted(actual.items()))
@@ -99,8 +138,14 @@ Commit: {report['commit']}
 4. Dùng nút + để cài/cập nhật từng môn. Cập nhật CPV không cần cập nhật AIL;
    có thể giữ nguyên phiên AIL đang học. Gói ZIP ứng dụng không chứa DATA/database.
 
-Mã Google Drive của 4 môn đang bật:
+Mã Google Drive của {len(actual)} gói đang bật:
 {codes}
+
+SSG105t là gói riêng 369 câu, không ghi đè SSG105 gộp 456 câu. Hồ sơ đã cài
+SSG105t 158 câu có thể cập nhật qua nút + với cùng mã, chọn Xác minh và thay thế.
+Giữ tiến độ, lịch sử và 158 câu cũ; bổ sung 211 câu. Nếu chính SSG105t có phiên
+đang học, chọn Giữ phiên và hủy thao tác để tiếp tục học, rồi cập nhật khi đã
+kết thúc phiên. Không chọn hủy phiên nếu vẫn muốn tiếp tục phiên đó.
 
 Bản này sửa đồng bộ manifest–SQLite và phục hồi metadata bị thiếu từ snapshot
 hợp lệ, không xóa tiến độ hay phiên học. Version mới được tạo khi nội dung đổi;

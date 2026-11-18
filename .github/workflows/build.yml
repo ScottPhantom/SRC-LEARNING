@@ -28,7 +28,7 @@ jobs:
             spec_file: study_app.spec
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       PYTHONUTF8: "1"
 
@@ -87,6 +87,23 @@ jobs:
         shell: pwsh
         run: python tools/flashcard_release_qa.py --workdir "$env:RUNNER_TEMP/src-learning-release-qa" --exe dist/LuyenThiHinhAnh.exe
 
+      - name: Verify approved SSG105t and old SSG105 public ZIPs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python tools/ssg105t_release_qa.py prepare --workdir "$env:RUNNER_TEMP/src-learning-release-qa"
+
+      - name: Test SSG105t fresh install, 158 to 369 upgrade and active-session cancellation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python -X faulthandler -u tools/ssg105t_release_qa.py qt --workdir "$env:RUNNER_TEMP/src-learning-release-qa"
+
+      - name: Test actual Windows EXE SSG105t imports, preservation and reopening
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python -u tools/ssg105t_release_qa.py windows --workdir "$env:RUNNER_TEMP/src-learning-release-qa" --exe dist/LuyenThiHinhAnh.exe
+
       - name: Recheck DSS metadata and package verified Windows EXE
         if: runner.os == 'Windows'
         shell: pwsh
@@ -137,6 +154,7 @@ jobs:
           path: |
             ${{ runner.temp }}/src-learning-release-qa/*-gui-report.json
             ${{ runner.temp }}/src-learning-release-qa/metadata.json
+            ${{ runner.temp }}/src-learning-release-qa/ssg105t-metadata.json
             ${{ runner.temp }}/src-learning-release-qa/*.png
             ${{ runner.temp }}/src-learning-release-qa/*-controls.txt
             ${{ runner.temp }}/src-learning-release-qa/*-crash-log.txt
