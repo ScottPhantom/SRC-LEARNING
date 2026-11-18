@@ -148,6 +148,7 @@ def native_window(executable: Path, profile: Path, root: Path, label: str):
             time.sleep(0.2)
         assert main is not None, "No real Flashcard EXE window"
         main.wait("visible enabled ready", timeout=30)
+        main.maximize()
         yield process, main
     except Exception:
         if main is not None:
@@ -194,9 +195,50 @@ def native_open_flashcards(main, position: int) -> None:
     main.child_window(title="Đã thuộc", control_type="Button").wait("visible", timeout=10)
 
 
-def windows_flashcard_qa(root: Path, executable: Path) -> list[dict]:
+@contextmanager
+def native_test_display():
+    """Temporarily fit the app on the CI VM; never persist a user's display mode."""
     if sys.platform != "win32" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise ValueError("Flashcard native QA requires the isolated GitHub Windows runner")
+    import pywintypes
+    import win32api
+    import win32con
+
+    original = win32api.EnumDisplaySettings(None, win32con.ENUM_CURRENT_SETTINGS)
+    changed = original.PelsWidth < 1280 or original.PelsHeight < 900
+    try:
+        if changed:
+            modes = []
+            for index in range(512):
+                try:
+                    mode = win32api.EnumDisplaySettings(None, index)
+                except pywintypes.error:
+                    break
+                if mode.PelsWidth >= 1280 and mode.PelsHeight >= 900 and mode.BitsPerPel == original.BitsPerPel:
+                    modes.append(mode)
+            assert modes, "The CI display has no supported mode large enough for physical mouse QA"
+            modes.sort(key=lambda mode: (mode.PelsWidth * mode.PelsHeight, mode.PelsWidth, mode.PelsHeight))
+            code = win32api.ChangeDisplaySettings(modes[0], 0)
+            assert code == win32con.DISP_CHANGE_SUCCESSFUL, f"Cannot resize CI display: {code}"
+        actual = win32api.EnumDisplaySettings(None, win32con.ENUM_CURRENT_SETTINGS)
+        assert actual.PelsWidth >= 1280 and actual.PelsHeight >= 900
+        print(f"Flashcard QA display: {actual.PelsWidth}x{actual.PelsHeight} (temporary CI mode)", flush=True)
+        yield {"width": actual.PelsWidth, "height": actual.PelsHeight}
+    finally:
+        if changed:
+            code = win32api.ChangeDisplaySettings(original, 0)
+            assert code == win32con.DISP_CHANGE_SUCCESSFUL, "Cannot restore the CI display mode"
+
+
+def windows_flashcard_qa(root: Path, executable: Path) -> list[dict]:
+    with native_test_display() as display:
+        cases = _windows_flashcard_cases(root, executable)
+        for case in cases:
+            case["display"] = display
+        return cases
+
+
+def _windows_flashcard_cases(root: Path, executable: Path) -> list[dict]:
     from pywinauto.uia_defines import IUIA
 
     cases = []
@@ -208,6 +250,7 @@ def windows_flashcard_qa(root: Path, executable: Path) -> list[dict]:
         with native_window(executable, state["path"], root, f"{theme}-study") as (process, main):
             native_open_flashcards(main, state["initial_position"])
             for index, known in enumerate(ratings):
+                print(f"Flashcard EXE QA: {theme}, Space then mouse rating {index + 1}: {known}", flush=True)
                 focus_trace.append(native_space(process))
                 main.child_window(title="Đã thuộc", control_type="Button").wait("enabled", timeout=10)
                 main.child_window(title="Đã thuộc" if known else "Chưa thuộc", control_type="Button").click_input()
