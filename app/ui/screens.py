@@ -1092,7 +1092,10 @@ class FlashcardScreen(BasePage):
         self.new_button.clicked.connect(self._restart)
         self.learning_button.clicked.connect(lambda: self._new(True))
         self.shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
-        self.shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        # Space belongs to the visible study page even if disabling a rating
+        # button temporarily moves focus into the shared header. Qt excludes
+        # hidden pages and modal windows from this WindowShortcut context.
+        self.shortcut.setContext(Qt.WindowShortcut)
         self.shortcut.activated.connect(self.viewer.toggle_answer)
         self.left_shortcut = QShortcut(QKeySequence(Qt.Key_Left), self)
         self.left_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
@@ -1104,6 +1107,10 @@ class FlashcardScreen(BasePage):
         self.escape_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.escape_shortcut.activated.connect(self.back_requested)
         self._render(self.service.resume_or_start())
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.viewer.setFocus(Qt.OtherFocusReason)
 
     def _clear_answer_panel(self) -> None:
         self.answer_title.hide()
@@ -1217,6 +1224,10 @@ class FlashcardScreen(BasePage):
     def _enable_rating(self, enabled: bool) -> None:
         self.known_button.setEnabled(enabled)
         self.unknown_button.setEnabled(enabled)
+        if not enabled and self.isVisible():
+            # The clicked button loses focus when the next card disables it.
+            # Keep subsequent Space/arrow/Escape input inside the study view.
+            self.viewer.setFocus(Qt.OtherFocusReason)
 
     def _render(self, state: FlashState) -> None:
         self._live_state = state

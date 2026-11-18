@@ -277,6 +277,9 @@ người dùng có thể kiểm tra và quản lý dung lượng ở đó.
 ### Flash Cards
 
 - Nhấn `Space` để hiện hoặc ẩn đáp án.
+- Sau khi bấm Đã thuộc/Chưa thuộc, focus bàn phím trở lại vùng học; Space
+  không kích hoạt nhầm logo về Home. Phím tắt chỉ thuộc màn hình Flash Cards
+  đang hiển thị, không chiếm Space trong hộp thoại hoặc màn hình khác.
 - Đánh dấu câu là Đã thuộc hoặc Chưa thuộc.
 - Có thể đóng ứng dụng và tiếp tục phiên học sau.
 - Quick Review hỗ trợ duyệt lại câu chưa thuộc và câu có tỷ lệ sai cao.
@@ -374,6 +377,13 @@ vẫn phải giữ nguyên. Trường hợp chỉ phục hồi metadata không �
 
 Sau build, CI dùng UI Automation điều khiển **chính EXE Windows** để nhập mã,
 xác nhận thay thế, tải thực tế từ Drive, chờ hoàn tất 100% và đóng app sạch.
+Gate Flash Cards riêng chạy trên EXE ở theme sáng/tối: tiếp tục một phiên AIL
+giả lập đang dở, gửi Space tới nơi thực sự đang nhận phím, bấm Đã thuộc/Chưa
+thuộc bằng chuột qua nhiều câu, thử focus lệch sang logo Home, rồi đóng và mở
+lại EXE. Phải giữ nguyên session ID, thứ tự câu, vị trí đã lưu và toàn bộ tiến
+độ/lịch sử không liên quan, bao gồm phiên Cramming và phiên Flash Cards môn khác.
+`tools/flashcard_release_qa.py` chỉ thao tác các process do nó tự mở trên Windows
+runner; không đọc/copy DATA hoặc SQLite của người phát triển/người dùng.
 Ảnh GUI và báo cáo nằm trong artifact `SRC-Learning-Windows-GUI-verification`.
 `tools/windows_release.py` chỉ tạo ZIP nếu EXE x64 đúng SHA của bản vừa thử,
 catalog được nhúng trong EXE khớp metadata đã kiểm định và mọi gate đều đạt.

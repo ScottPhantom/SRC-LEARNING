@@ -61,6 +61,21 @@ def package(executable: Path, qa: Path, archive: Path) -> dict:
         raise ValueError("The executable changed after native GUI QA")
     if any(not case.get("clean_exit") for case in windows_report["cases"]):
         raise ValueError("Native GUI QA did not exit cleanly")
+    flash_report = json.loads((qa / "flashcard-windows-gui-report.json").read_text(encoding="utf-8"))
+    if (
+        flash_report.get("status") != "PASS" or flash_report.get("platform") != "win32"
+        or flash_report.get("mode") != "windows"
+        or flash_report.get("commit") != windows_report.get("commit")
+        or flash_report.get("executable_sha256") != executable_digest
+        or {case["scenario"] for case in flash_report.get("cases", [])} != {"light", "dark"}
+    ):
+        raise ValueError("Incomplete or mismatched native Flashcard GUI release gate")
+    for case in flash_report["cases"]:
+        if case.get("status") != "PASS" or any(not case.get(field) for field in (
+            "mouse_keyboard_flow_passed", "header_focus_guard_passed", "session_resume_passed",
+            "unrelated_progress_preserved", "question_order_preserved", "clean_exit",
+        )):
+            raise ValueError("Flashcard GUI QA did not preserve sessions or pass mouse/keyboard input")
     actual = embedded_catalog(executable)
     if actual != metadata["catalog"]:
         raise ValueError("Embedded EXE catalog differs from the verified DSS metadata")
@@ -70,6 +85,7 @@ def package(executable: Path, qa: Path, archive: Path) -> dict:
         "executable": executable.name, "executable_sha256": executable_digest,
         "catalog": actual, "qt_gui_cases": qt_report["cases"],
         "native_exe_gui_cases": windows_report["cases"],
+        "native_flashcard_gui_cases": flash_report["cases"],
         "data_included": False, "authenticode_signed": False,
     }
     codes = "\n".join(f"- {name}: {item['file_id']}" for name, item in sorted(actual.items()))
@@ -90,6 +106,10 @@ Bản này sửa đồng bộ manifest–SQLite và phục hồi metadata bị t
 hợp lệ, không xóa tiến độ hay phiên học. Version mới được tạo khi nội dung đổi;
 tải lại cùng nội dung không tạo thêm version. Lịch sử mâu thuẫn hoặc snapshot
 hỏng vẫn bị chặn để bảo vệ dữ liệu, không tự đặt lại version.
+
+Flash Cards: Space luôn hiện/ẩn đáp án của màn hình học đang mở, không bấm nhầm
+logo về Home sau khi chọn Đã thuộc/Chưa thuộc. Bản EXE đã qua kiểm thử chuột +
+bàn phím ở giao diện sáng/tối và tiếp tục đúng phiên học sau khi mở lại.
 
 EXE chưa ký số Authenticode. Chỉ dùng bản tải từ Release chính thức và đối chiếu
 SHA-256; không tắt Defender/SmartScreen toàn hệ thống để xử lý cảnh báo.

@@ -31,6 +31,16 @@ def release_inputs(tmp_path, monkeypatch):
             "cases": [{"scenario": scenario, "status": "PASS", "preserved_progress_and_two_ail_sessions": True, "clean_exit": True} for scenario in scenarios],
         }
         (qa / f"{mode}-gui-report.json").write_text(json.dumps(report))
+    flash = {
+        "status": "PASS", "platform": "win32", "mode": "windows", "commit": "test-commit",
+        "executable_sha256": windows_release.sha256(executable),
+        "cases": [{
+            "scenario": theme, "status": "PASS", "mouse_keyboard_flow_passed": True,
+            "header_focus_guard_passed": True, "session_resume_passed": True,
+            "unrelated_progress_preserved": True, "question_order_preserved": True, "clean_exit": True,
+        } for theme in ("light", "dark")],
+    }
+    (qa / "flashcard-windows-gui-report.json").write_text(json.dumps(flash))
     return executable, qa, tmp_path / "release.zip"
 
 
@@ -86,3 +96,22 @@ def test_rejects_non_x64_windows_executable(release_inputs):
         stream.write(b"\x4c\x01")  # PE i386, not AMD64.
     with pytest.raises(ValueError, match="not Windows x64"):
         windows_release.verify_pe_x64(executable)
+
+
+@pytest.mark.parametrize("fault", ["missing_case", "progress", "resume", "keyboard", "commit", "hash", "platform"])
+def test_package_requires_matching_native_flashcard_evidence(release_inputs, fault):
+    executable, qa, archive = release_inputs
+    path = qa / "flashcard-windows-gui-report.json"
+    report = json.loads(path.read_text())
+    if fault == "missing_case":
+        report["cases"].pop()
+    elif fault in {"progress", "resume", "keyboard"}:
+        field = {"progress": "unrelated_progress_preserved", "resume": "session_resume_passed", "keyboard": "mouse_keyboard_flow_passed"}[fault]
+        report["cases"][0][field] = False
+    else:
+        field = {"commit": "commit", "hash": "executable_sha256", "platform": "platform"}[fault]
+        report[field] = "incorrect-evidence"
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="Flashcard"):
+        windows_release.package(executable, qa, archive)
+    assert not archive.exists()

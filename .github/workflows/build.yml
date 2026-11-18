@@ -82,6 +82,11 @@ jobs:
         shell: pwsh
         run: python tools/release_gui_qa.py windows --workdir "$env:RUNNER_TEMP/src-learning-release-qa" --exe dist/LuyenThiHinhAnh.exe
 
+      - name: Test Flash Cards physical mouse and Space on the actual Windows EXE
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python tools/flashcard_release_qa.py --workdir "$env:RUNNER_TEMP/src-learning-release-qa" --exe dist/LuyenThiHinhAnh.exe
+
       - name: Recheck DSS metadata and package verified Windows EXE
         if: runner.os == 'Windows'
         shell: pwsh
