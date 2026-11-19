@@ -147,27 +147,59 @@ def test_trial_rejects_bad_manifest_and_symlinks(
         workspace.install_from(trial_bank)
 
 
-@pytest.mark.parametrize("wrapper", ["", "DATA/"])
-def test_trial_zip_imports_ssg150t_with_complete_keys(
-    tmp_path: Path, ssg_trial_bank: Path, wrapper: str
+@pytest.mark.parametrize(
+    ("bank_fixture", "wrapper", "expected_count"),
+    [
+        ("ssg_trial_bank", "", SSG_TRIAL_QUESTIONS),
+        ("second_trial_bank", "", 1),
+        ("second_trial_bank", "DATA/", 1),
+    ],
+    ids=["legacy-ssg-archive", "trial-at-root", "trial-under-data"],
+)
+def test_trial_zip_imports_one_supported_subject_with_complete_keys(
+    tmp_path: Path, request: pytest.FixtureRequest, bank_fixture: str,
+    wrapper: str, expected_count: int,
 ) -> None:
+    bank: Path = request.getfixturevalue(bank_fixture)
     workspace = TrialWorkspace(tmp_path / "trial")
     archive = tmp_path / "shared-questions.zip"
     with ZipFile(archive, "w") as bundle:
-        for source in sorted(ssg_trial_bank.rglob("*")):
+        for source in sorted(bank.rglob("*")):
             if source.is_file():
-                relative = source.relative_to(ssg_trial_bank).as_posix()
-                bundle.write(source, f"{wrapper}{SSG_TRIAL_SUBJECT}/{relative}")
-        if not wrapper:
+                relative = source.relative_to(bank).as_posix()
+                bundle.write(source, f"{wrapper}{bank.name}/{relative}")
+        if bank.name == SSG_TRIAL_SUBJECT:
             # The previously shared portable archive included this sibling file.
             bundle.writestr("SSG150t-code.patch", "legacy patch")
 
-    assert workspace.install_from_zip(archive) == SSG_TRIAL_QUESTIONS
+    assert workspace.install_from_zip(archive) == expected_count
 
-    target = workspace.data_dir / SSG_TRIAL_SUBJECT
-    assert (target / "answers.csv").read_bytes() == (ssg_trial_bank / "answers.csv").read_bytes()
-    assert len(list((target / "Selections_1_choose").glob("*.png"))) == SSG_TRIAL_QUESTIONS
+    target = workspace.data_dir / bank.name
+    assert (target / "answers.csv").read_bytes() == (bank / "answers.csv").read_bytes()
+    assert len(list((target / "Selections_1_choose").glob("*.png"))) == expected_count
     assert list(workspace.data_dir.iterdir()) == [target]
+
+
+@pytest.mark.parametrize(
+    "subject_folders",
+    [("SSG105t",), ("CPV301_t", "DATA/DAP391m_t")],
+    ids=["normal-subject-only", "ambiguous-trial-subjects"],
+)
+def test_trial_zip_requires_exactly_one_supported_subject(
+    tmp_path: Path, second_trial_bank: Path, subject_folders: tuple[str, ...]
+) -> None:
+    workspace = TrialWorkspace(tmp_path / "trial")
+    archive = tmp_path / "unsupported.zip"
+    question = "Selections_1_choose/Q001.png"
+    with ZipFile(archive, "w") as bundle:
+        for subject_folder in subject_folders:
+            bundle.write(second_trial_bank / question, f"{subject_folder}/{question}")
+            bundle.write(second_trial_bank / "answers.csv", f"{subject_folder}/answers.csv")
+
+    with pytest.raises(DataPackageError, match="đúng một thư mục môn học thử"):
+        workspace.install_from_zip(archive)
+
+    assert not list(workspace.data_dir.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -199,12 +231,13 @@ def test_trial_zip_rejects_incomplete_keys_or_unsafe_member(
     assert not (workspace.data_dir / SSG_TRIAL_SUBJECT).exists()
 
 
-def test_normal_window_hides_ssg150t_even_with_trial_data_path(
+def test_normal_window_hides_trial_subjects_even_with_trial_data_path(
     tmp_path: Path, second_trial_bank: Path
 ) -> None:
     application = QApplication.instance() or QApplication([])
     workspace = TrialWorkspace(tmp_path / ".src-learning-test")
     workspace.prepare()
+    shutil.copytree(second_trial_bank, workspace.data_dir / second_trial_bank.name)
     shutil.copytree(second_trial_bank, workspace.data_dir / SSG_TRIAL_SUBJECT)
     shutil.copytree(second_trial_bank, workspace.data_dir / "SSG105t")
     database = Database(tmp_path / "study_progress.sqlite3")

@@ -22,6 +22,14 @@ DEFAULT_DATA_DIR = STATE_DIR / "DATA"
 DEFAULT_DB_PATH = STATE_DIR / "study_progress.sqlite3"
 SSG_TRIAL_SUBJECT = "SSG150t"
 
+
+def is_trial_subject(name: str) -> bool:
+    normalized = name.casefold()
+    return bool(name) and not name.startswith(".") and (
+        normalized.endswith("_t") or normalized == SSG_TRIAL_SUBJECT.casefold()
+    )
+
+
 # Published CSV of the GOOGLE_IDS tab only; never the private Sheet edit URL.
 # A catalog_source_url.txt file beside the executable can override this URL
 # without rebuilding when the publisher rotates the public link.

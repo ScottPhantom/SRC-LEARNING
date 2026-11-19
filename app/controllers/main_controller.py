@@ -28,9 +28,9 @@ from PyQt5.QtWidgets import (
 from app.config import (
     APP_NAME,
     DEFAULT_DATA_DIR,
-    SSG_TRIAL_SUBJECT,
     STATE_DIR,
     catalog_csv_url,
+    is_trial_subject,
 )
 from app.controllers.data_install_worker import CatalogRefreshTask, DataInstallTask
 from app.controllers.scan_worker import ScanTask
@@ -601,7 +601,7 @@ class MainWindow(QMainWindow):
         if not self.trial_mode:
             subjects = [
                 subject for subject in subjects
-                if subject.name.casefold() != SSG_TRIAL_SUBJECT.casefold()
+                if not is_trial_subject(subject.name)
             ]
         previous_subjects = self.subjects.copy()
         pending_install = self._pending_data_install_result
