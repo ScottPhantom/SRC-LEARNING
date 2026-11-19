@@ -135,33 +135,17 @@ Từ thư mục `SRC-LEARNING`, chạy:
 python main.py -t
 ```
 
-App mở thẳng giao diện Thư viện như khi chạy không có cờ; không hiện launcher,
-nhãn hay tiêu đề "test". Khác biệt chỉ ở nguồn dữ liệu và tiến độ: chế độ này
-đọc các thư mục môn có tên kết thúc bằng `_t` và môn `SSG150t` trong
-`.src-learning-test/data/` và lưu DB tại
-`.src-learning-test/test_progress.sqlite3` (log tại
-`.src-learning-test/study_app.log`). `DATA/` và `study_progress.sqlite3` của
-app thường không bị sử dụng. Toàn bộ `.src-learning-test/` là dữ liệu local
-và bị `.gitignore` loại khỏi Git.
+App mở thẳng Thư viện và đọc các môn thử từ `.src-learning-test/data/`.
+Tiến độ và nhật ký của chế độ này được lưu riêng trong `.src-learning-test/`.
+Git bỏ qua thư mục này, vì vậy hãy chuyển gói dữ liệu riêng khi sử dụng trên máy khác.
 
-Để nhập bộ `SSG150t`, nhấn `+` → **Chọn ZIP** rồi chọn tệp chứa
-thư mục `SSG150t/` hoặc `DATA/SSG150t/`. App kiểm tra ảnh và đáp án
-trước khi thêm môn vào thư viện thử. Tệp ZIP được chuyển riêng với mã nguồn Git.
+- Với gói ZIP được app hỗ trợ, bấm **`+` → Chọn ZIP** rồi chọn trực tiếp tệp ZIP.
+- Để nhập từ thư mục nguồn, bấm **`+` → Chọn thư mục** rồi chọn thư mục môn thử.
+  Tên thư mục môn thử thông thường kết thúc bằng `_t`.
 
-Bạn cũng có thể dùng `+` → **Chọn thư mục** để nhập một môn thử từ thư
-mục nguồn. App sẽ kiểm tra và tạo bản sao trong `.src-learning-test/data/`.
-Môn thử của các mã đã biết (ví dụ `AIL303M_t`)
-được xếp vào cùng học kỳ với mã gốc; môn chưa có học kỳ có thể khai báo
-`academic_term.json` trong thư mục môn. Trong Cài đặt, đường dẫn DATA được khóa
-để không vô tình chuyển sang dữ liệu thường; Quản lý môn học chỉ tác động lên bản thử.
-Nếu muốn chỉnh ảnh, `answers.csv` hay metadata, hãy chỉnh **bản sao** trong
-`.src-learning-test/data/TênMôn_t/` khi app đã đóng, rồi mở lại. Sửa thư mục
-nguồn ban đầu sẽ không tự đồng bộ vào bản sao.
-
-Bản sao hiện có là `AIL303M_t` với 500 câu học. Riêng môn này, Mock Exam chỉ
-dùng 154 ảnh liệt kê trong `exam_first_154.json`; môn thử khác không có giới
-hạn đặc biệt. Chế độ này mới được kiểm thử từ source trên macOS; dữ liệu thử
-không được đưa vào bản phát hành Windows.
+App kiểm tra dữ liệu trước khi thêm môn vào thư viện thử. Khi cần chỉnh ảnh
+hoặc đáp án, hãy đóng app, sửa bản sao của môn trong `.src-learning-test/data/`,
+rồi mở lại bằng `python main.py -t`.
 
 ### Xuất thống kê môn học với `-ss`
 
