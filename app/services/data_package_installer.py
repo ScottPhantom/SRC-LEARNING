@@ -15,7 +15,7 @@ import zipfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import resources
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import gdown
 from tqdm import tqdm
@@ -24,7 +24,10 @@ from app.config import CATEGORIES, IMAGE_EXTENSIONS
 from app.domain.models import Question, parse_option_letters
 from app.repositories.answer_key import AnswerKeyRepository
 from app.services.data_scanner import DataScannerService
-from app.services.question_bank_updates import VERSION_DIRECTORY, stage_replacement_answer_history
+from app.services.question_bank_updates import (
+    VERSION_DIRECTORY,
+    stage_replacement_answer_history,
+)
 from app.services.subject_management import SubjectManagementError, SubjectManager
 
 ProgressCallback = Callable[[str, int, str], None]
@@ -396,7 +399,12 @@ class DataPackageInstaller:
             relative.is_absolute()
             or not relative.parts
             or any(part in {"", ".", ".."} for part in relative.parts)
-            or (relative.parts and ":" in relative.parts[0])
+            or any(
+                part.endswith((".", " "))
+                or any(char in '<>:"|?*' or ord(char) < 32 for char in part)
+                or PureWindowsPath(part).is_reserved()
+                for part in relative.parts
+            )
             or stat.S_ISLNK(mode)
         ):
             raise DataPackageError(

@@ -20,6 +20,7 @@ else:
     STATE_DIR = Path.home() / ".luyen_thi_hinh_anh" if _FROZEN else APP_DIR
 DEFAULT_DATA_DIR = STATE_DIR / "DATA"
 DEFAULT_DB_PATH = STATE_DIR / "study_progress.sqlite3"
+SSG_TRIAL_SUBJECT = "SSG150t"
 
 # Published CSV of the GOOGLE_IDS tab only; never the private Sheet edit URL.
 # A catalog_source_url.txt file beside the executable can override this URL

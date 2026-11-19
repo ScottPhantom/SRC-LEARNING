@@ -25,7 +25,13 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.config import APP_NAME, DEFAULT_DATA_DIR, STATE_DIR, catalog_csv_url
+from app.config import (
+    APP_NAME,
+    DEFAULT_DATA_DIR,
+    SSG_TRIAL_SUBJECT,
+    STATE_DIR,
+    catalog_csv_url,
+)
 from app.controllers.data_install_worker import CatalogRefreshTask, DataInstallTask
 from app.controllers.scan_worker import ScanTask
 from app.domain.models import AppSettings, ExamConfig, Subject
@@ -68,6 +74,8 @@ LOGGER = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
+    trial_mode = False
+
     def __init__(self, database: Database):
         super().__init__()
         self.database = database
@@ -590,6 +598,11 @@ class MainWindow(QMainWindow):
         self.home.notice.setText(f"Không thể quét dữ liệu: {message}")
 
     def _apply_subjects(self, subjects: list[Subject]) -> None:
+        if not self.trial_mode:
+            subjects = [
+                subject for subject in subjects
+                if subject.name.casefold() != SSG_TRIAL_SUBJECT.casefold()
+            ]
         previous_subjects = self.subjects.copy()
         pending_install = self._pending_data_install_result
         selected_subject_name = (

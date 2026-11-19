@@ -1,4 +1,4 @@
-"""Isolated data and progress for subjects whose folder name ends in ``_t``."""
+"""Isolated data and progress for subjects used in ``-t`` mode."""
 
 from __future__ import annotations
 
@@ -6,17 +6,20 @@ import json
 import logging
 import os
 import shutil
+import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
-from app.config import STATE_DIR
+from app.config import SSG_TRIAL_SUBJECT, STATE_DIR
 from app.controllers.main_controller import MainWindow
 from app.domain.models import AppSettings, Subject
 from app.repositories.answer_key import AnswerKeyRepository
 from app.repositories.database import Database
+from app.services.data_package_installer import DataPackageError, DataPackageInstaller
 from app.services.data_scanner import DataScannerService
 from app.services.exam import ExamService
 from app.services.subject_management import (
@@ -32,7 +35,10 @@ AIL_EXAM_POOL_SIZE = 154
 
 
 def is_trial_subject(name: str) -> bool:
-    return bool(name) and not name.startswith(".") and name.casefold().endswith("_t")
+    normalized = name.casefold()
+    return bool(name) and not name.startswith(".") and (
+        normalized.endswith("_t") or normalized == SSG_TRIAL_SUBJECT.casefold()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,11 +96,13 @@ class TestWorkspace:
         return frozenset(paths)
 
     def install_from(self, source: Path) -> int:
-        """Copy one local ``*_t`` folder into DATA without touching the source."""
+        """Copy one local trial folder into DATA without touching the source."""
         self.prepare()
         source = Path(source).expanduser()
         if not source.is_dir() or source.is_symlink() or not is_trial_subject(source.name):
-            raise ValueError("Hãy chọn một thư mục môn có tên kết thúc bằng _t, không phải symlink.")
+            raise ValueError(
+                "Hãy chọn thư mục môn thử có hậu tố _t hoặc SSG150t, không phải symlink."
+            )
         target = subject_destination(self.data_dir, source.name)
         if target.exists() or target.is_symlink():
             raise ValueError(f"{source.name} đã có trong DATA thử; không tự ghi đè.")
@@ -119,9 +127,31 @@ class TestWorkspace:
             os.replace(copied, target)
         return subject.question_count
 
+    def install_from_zip(self, archive: Path) -> int:
+        """Validate the complete SSG150t bank before installing it in trial DATA."""
+        self.prepare()
+        with TemporaryDirectory(prefix=".unpack-", dir=self.data_dir) as temporary:
+            extracted = Path(temporary)
+
+            def ignore_progress(*_args: object) -> None:
+                pass
+
+            try:
+                DataPackageInstaller._safe_extract(archive, extracted, ignore_progress)
+            except DataPackageError:
+                raise
+            except (RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
+                raise DataPackageError("Không thể giải nén ZIP SSG150t.") from exc
+            source, _ = DataPackageInstaller._validate_subject(
+                extracted, SSG_TRIAL_SUBJECT, ignore_progress
+            )
+            return self.install_from(source)
+
 
 class TestMainWindow(MainWindow):
     """Normal-looking app window bound exclusively to the private workspace."""
+
+    trial_mode = True
 
     def __init__(self, database: Database, workspace: TestWorkspace):
         self.test_workspace = workspace
@@ -151,14 +181,29 @@ class TestMainWindow(MainWindow):
         return service
 
     def show_data_import(self) -> None:
-        selected = QFileDialog.getExistingDirectory(
-            self, "Chọn thư mục môn học có hậu tố _t"
-        )
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Thêm môn học thử")
+        dialog.setText("Chọn tệp ZIP SSG150t hoặc thư mục môn học thử.")
+        zip_button = dialog.addButton("Chọn ZIP", QMessageBox.AcceptRole)
+        folder_button = dialog.addButton("Chọn thư mục", QMessageBox.ActionRole)
+        dialog.addButton(QMessageBox.Cancel)
+        dialog.exec_()
+        choice = dialog.clickedButton()
+        if choice is zip_button:
+            selected, _ = QFileDialog.getOpenFileName(
+                self, "Chọn tệp ZIP SSG150t", "", "Tệp ZIP (*.zip)"
+            )
+            install = self.test_workspace.install_from_zip
+        elif choice is folder_button:
+            selected = QFileDialog.getExistingDirectory(self, "Chọn thư mục môn học thử")
+            install = self.test_workspace.install_from
+        else:
+            return
         if not selected:
             return
         try:
-            self.test_workspace.install_from(Path(selected))
-        except (OSError, TypeError, ValueError, SubjectManagementError) as exc:
+            install(Path(selected))
+        except (DataPackageError, OSError, TypeError, ValueError, SubjectManagementError) as exc:
             QMessageBox.warning(self, "Không thể thêm môn học", str(exc))
             return
         self.refresh_data()

@@ -137,17 +137,20 @@ python main.py -t
 
 App mở thẳng giao diện Thư viện như khi chạy không có cờ; không hiện launcher,
 nhãn hay tiêu đề "test". Khác biệt chỉ ở nguồn dữ liệu và tiến độ: chế độ này
-đọc các thư mục môn có tên kết thúc bằng `_t` trong
+đọc các thư mục môn có tên kết thúc bằng `_t` và môn `SSG150t` trong
 `.src-learning-test/data/` và lưu DB tại
 `.src-learning-test/test_progress.sqlite3` (log tại
 `.src-learning-test/study_app.log`). `DATA/` và `study_progress.sqlite3` của
 app thường không bị sử dụng. Toàn bộ `.src-learning-test/` là dữ liệu local
 và bị `.gitignore` loại khỏi Git.
 
-Để thêm một môn thử, chép **nguyên thư mục** `TênMôn_t/` vào
-`.src-learning-test/data/`, hoặc nhấn nút `+` rồi chọn thư mục nguồn: app sẽ
-kiểm tra và tạo một bản sao vật lý. Môn mới xuất hiện trên Home sau khi nhấn
-**Làm mới** hoặc mở lại app. Môn thử của các mã đã biết (ví dụ `AIL303M_t`)
+Để nhập bộ `SSG150t`, nhấn `+` → **Chọn ZIP** rồi chọn tệp chứa
+thư mục `SSG150t/` hoặc `DATA/SSG150t/`. App kiểm tra ảnh và đáp án
+trước khi thêm môn vào thư viện thử. Tệp ZIP được chuyển riêng với mã nguồn Git.
+
+Bạn cũng có thể dùng `+` → **Chọn thư mục** để nhập một môn thử từ thư
+mục nguồn. App sẽ kiểm tra và tạo bản sao trong `.src-learning-test/data/`.
+Môn thử của các mã đã biết (ví dụ `AIL303M_t`)
 được xếp vào cùng học kỳ với mã gốc; môn chưa có học kỳ có thể khai báo
 `academic_term.json` trong thư mục môn. Trong Cài đặt, đường dẫn DATA được khóa
 để không vô tình chuyển sang dữ liệu thường; Quản lý môn học chỉ tác động lên bản thử.
@@ -164,7 +167,7 @@ không được đưa vào bản phát hành Windows.
 
 ```bash
 python main.py -ss       # dữ liệu và tiến độ app thường
-python main.py -t -ss    # chỉ các môn *_t và tiến độ thử
+python main.py -t -ss    # chỉ các môn thử và tiến độ thử
 ```
 
 Lệnh `-ss` tạo báo cáo rồi thoát, không mở giao diện. Bản thường ghi JSON tại
